@@ -15,8 +15,8 @@ COPY remlight/ ./remlight/
 COPY sql/ ./sql/
 COPY schemas/ ./schemas/
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -e .
+# Install Python dependencies (including tracing for Phoenix)
+RUN pip install --no-cache-dir -e ".[tracing]"
 
 # Environment
 ENV PYTHONUNBUFFERED=1 \

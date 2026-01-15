@@ -12,7 +12,12 @@ Components:
 - core.py: Main streaming generators
 """
 
-from remlight.agentic.streaming.core import stream_plain, stream_sse
+from remlight.agentic.streaming.core import (
+    save_user_message,
+    stream_plain,
+    stream_sse,
+    stream_sse_with_save,
+)
 from remlight.agentic.streaming.events import (
     ActionEvent,
     ContentChunk,
@@ -33,7 +38,9 @@ from remlight.agentic.streaming.state import StreamingState
 __all__ = [
     # Core streaming functions
     "stream_sse",
+    "stream_sse_with_save",
     "stream_plain",
+    "save_user_message",
     # Event types
     "ActionEvent",
     "ToolCallEvent",

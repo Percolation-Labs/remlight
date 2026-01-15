@@ -9,7 +9,7 @@ The fastest way to get started is with Docker Compose:
 ```bash
 cd remlight
 
-# Start PostgreSQL and API (database schema installs automatically)
+# Start PostgreSQL, Phoenix, and API (database schema installs automatically)
 docker compose up -d
 
 # Check status
@@ -19,7 +19,9 @@ docker compose ps
 docker compose logs -f api
 ```
 
-That's it! The API is now running at http://localhost:8080
+That's it! Services are now running:
+- **API**: http://localhost:8080
+- **Phoenix UI**: http://localhost:6006 (LLM observability)
 
 ## Verify Installation
 
@@ -108,6 +110,11 @@ LLM__TEMPERATURE=0.5
 
 # Database
 POSTGRES__CONNECTION_STRING=postgresql://remlight:remlight@localhost:5432/remlight
+
+# OpenTelemetry (Phoenix tracing - enabled by default in Docker)
+OTEL__ENABLED=true
+OTEL__COLLECTOR_ENDPOINT=http://phoenix:6006
+OTEL__SERVICE_NAME=remlight-api
 ```
 
 ## Custom Agents

@@ -53,11 +53,22 @@ class LLMSettings(BaseModel):
     max_iterations: int = int(os.getenv("LLM__MAX_ITERATIONS", "20"))
 
 
+class OTELSettings(BaseModel):
+    """OpenTelemetry settings for Phoenix integration."""
+
+    enabled: bool = os.getenv("OTEL__ENABLED", "false").lower() == "true"
+    service_name: str = os.getenv("OTEL__SERVICE_NAME", "remlight-api")
+    collector_endpoint: str = os.getenv("OTEL__COLLECTOR_ENDPOINT", "http://localhost:6006")
+    protocol: str = os.getenv("OTEL__PROTOCOL", "http")  # http or grpc
+    export_timeout: int = int(os.getenv("OTEL__EXPORT_TIMEOUT", "30000"))
+
+
 class Settings(BaseModel):
     """Application settings."""
 
     postgres: PostgresSettings = PostgresSettings()
     llm: LLMSettings = LLMSettings()
+    otel: OTELSettings = OTELSettings()
     environment: str = os.getenv("ENVIRONMENT", "development")
 
 

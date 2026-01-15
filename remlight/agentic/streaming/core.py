@@ -330,3 +330,183 @@ async def _handle_call_tools_node(
                     total_steps=state.total_steps,
                     label="Generating response",
                 ))
+
+
+# =============================================================================
+# Persistence wrappers
+# =============================================================================
+
+
+async def stream_sse_with_save(
+    agent,
+    prompt: str,
+    *,
+    model: str | None = None,
+    request_id: str | None = None,
+    agent_schema: str | None = None,
+    session_id: str | None = None,
+    user_id: str | None = None,
+    context=None,
+    message_history: list | None = None,
+) -> AsyncGenerator[str, None]:
+    """
+    Wrapper around stream_sse that saves messages after streaming.
+
+    Accumulates text content during streaming and saves to the database
+    after the stream completes.
+
+    NOTE: Call save_user_message() BEFORE this function to save the user's message.
+    This function only saves tool calls and assistant responses.
+
+    Args:
+        agent: Pydantic AI agent instance
+        prompt: User prompt
+        model: Model name
+        request_id: Optional request ID
+        agent_schema: Agent schema name
+        session_id: Session ID for message storage
+        user_id: User ID for message storage
+        context: Agent context for multi-agent propagation
+        message_history: Optional pydantic-ai message history
+
+    Yields:
+        SSE-formatted strings
+    """
+    import json
+
+    # Pre-generate message_id for frontend consistency
+    message_id = str(uuid.uuid4())
+
+    # Accumulate content during streaming
+    accumulated_content: list[str] = []
+
+    # Capture tool calls for persistence
+    tool_calls: list[dict] = []
+
+    async for chunk in stream_sse(
+        agent=agent,
+        prompt=prompt,
+        model=model,
+        request_id=request_id,
+        message_id=message_id,
+        session_id=session_id,
+        agent_schema=agent_schema,
+        context=context,
+        message_history=message_history,
+        tool_calls_out=tool_calls,
+    ):
+        yield chunk
+
+        # Extract text content from OpenAI-format chunks
+        if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
+            try:
+                data_str = chunk[6:].strip()
+                if data_str:
+                    data = json.loads(data_str)
+                    if "choices" in data and data["choices"]:
+                        delta = data["choices"][0].get("delta", {})
+                        content = delta.get("content")
+                        if content:
+                            accumulated_content.append(content)
+            except (json.JSONDecodeError, KeyError, IndexError):
+                pass
+
+    # After streaming completes, save messages to database
+    if session_id:
+        from datetime import datetime, timezone
+
+        from remlight.services.session import SessionMessageStore
+
+        timestamp = datetime.now(timezone.utc).isoformat()
+        messages_to_store = []
+
+        # Store tool call messages
+        for tool_call in tool_calls:
+            if not tool_call:
+                continue
+            tool_message = {
+                "role": "tool",
+                "content": json.dumps(tool_call.get("result", {}), default=str),
+                "timestamp": timestamp,
+                "tool_call_id": tool_call.get("tool_id"),
+                "tool_name": tool_call.get("tool_name"),
+                "tool_arguments": tool_call.get("arguments"),
+            }
+            messages_to_store.append(tool_message)
+
+        # Store assistant text response
+        full_content = None
+        if accumulated_content:
+            full_content = "".join(accumulated_content)
+        else:
+            # Fallback to text_response from tool results
+            for tool_call in tool_calls:
+                if not tool_call:
+                    continue
+                result = tool_call.get("result")
+                if isinstance(result, dict) and result.get("text_response"):
+                    text_response = result["text_response"]
+                    if text_response and str(text_response).strip():
+                        full_content = str(text_response)
+                        break
+
+        if full_content:
+            assistant_message = {
+                "id": message_id,
+                "role": "assistant",
+                "content": full_content,
+                "timestamp": timestamp,
+            }
+            messages_to_store.append(assistant_message)
+
+        if messages_to_store:
+            try:
+                store = SessionMessageStore(user_id=user_id or "anonymous")
+                await store.store_session_messages(
+                    session_id=session_id,
+                    messages=messages_to_store,
+                    user_id=user_id,
+                    compress=False,
+                )
+            except Exception:
+                pass  # Persistence failures shouldn't break streaming
+
+
+async def save_user_message(
+    session_id: str,
+    user_id: str | None,
+    content: str,
+) -> None:
+    """
+    Save user message to database before streaming.
+
+    Shared utility for consistent user message storage.
+
+    Args:
+        session_id: Session ID
+        user_id: User ID (optional)
+        content: Message content
+    """
+    if not session_id:
+        return
+
+    from datetime import datetime, timezone
+
+    from remlight.services.session import SessionMessageStore
+
+    user_msg = {
+        "role": "user",
+        "content": content,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        store = SessionMessageStore(user_id=user_id or "anonymous")
+        await store.store_session_messages(
+            session_id=session_id,
+            messages=[user_msg],
+            user_id=user_id,
+            compress=False,
+        )
+    except Exception:
+        pass

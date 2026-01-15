@@ -17,7 +17,7 @@ import pytest
 from remlight.agentic import AgentContext, create_agent
 from remlight.api.mcp_main import get_mcp_tools, init_mcp
 from remlight.api.routers.tools import get_agent_schema, init_tools
-from remlight.api.streaming import stream_agent_response_with_save, save_user_message
+from remlight.agentic.streaming import save_user_message, stream_sse_with_save
 from remlight.services.database import get_db
 from remlight.settings import settings
 
@@ -79,7 +79,7 @@ async def test_multi_agent_message_persistence(db_connected):
     tool_events = []
     action_events = []
 
-    async for chunk in stream_agent_response_with_save(
+    async for chunk in stream_sse_with_save(
         agent=agent_runtime.agent,
         prompt=prompt,
         model=settings.llm.default_model,

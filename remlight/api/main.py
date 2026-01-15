@@ -39,6 +39,10 @@ from remlight.api.mcp_main import get_mcp_server, init_mcp
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown."""
+    # Initialize OTEL instrumentation (must be before agent creation)
+    from remlight.agentic.otel import setup_instrumentation
+    setup_instrumentation()
+
     # Connect to database
     db = get_db()
     await db.connect()

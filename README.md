@@ -20,10 +20,11 @@ Minimal declarative agent framework with PostgreSQL memory and multi-agent suppo
 # Set your API key
 export OPENAI_API_KEY=your-key
 
-# Start services
+# Start services (PostgreSQL, Phoenix, API)
 docker-compose up -d
 
-# API available at http://localhost:8000
+# API available at http://localhost:8080
+# Phoenix UI at http://localhost:6006
 ```
 
 ### Local Development
@@ -297,12 +298,21 @@ The streaming architecture prevents content duplication - when child content is 
 ## Environment Variables
 
 ```bash
+# Database
 POSTGRES__CONNECTION_STRING=postgresql://user:pass@host:5432/db
+
+# LLM
 LLM__DEFAULT_MODEL=openai:gpt-4o-mini
 LLM__TEMPERATURE=0.5
 LLM__MAX_ITERATIONS=20
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
+
+# OpenTelemetry (Phoenix tracing)
+OTEL__ENABLED=true
+OTEL__COLLECTOR_ENDPOINT=http://phoenix:6006
+OTEL__SERVICE_NAME=remlight-api
+
 ENVIRONMENT=development
 ```
 
@@ -330,11 +340,12 @@ remlight/
     ├── agentic/
     │   ├── schema.py        # AgentSchema + YAML
     │   ├── provider.py      # Pydantic AI agent creation
-    │   └── context.py       # AgentContext + event sink
+    │   ├── context.py       # AgentContext + event sink
+    │   ├── otel.py          # OpenTelemetry/Phoenix setup
+    │   └── streaming/       # SSE streaming with child agent support
     ├── api/
     │   ├── main.py          # FastAPI app
     │   ├── mcp_main.py      # MCP server with search, action, ask_agent
-    │   ├── streaming.py     # SSE with child streaming
     │   └── routers/         # API endpoints (chat, query, tools)
     ├── cli/
     │   └── main.py          # ask, query, ingest, serve, install

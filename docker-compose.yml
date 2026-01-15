@@ -17,6 +17,21 @@ services:
       timeout: 5s
       retries: 5
 
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006"   # Phoenix UI and HTTP OTLP collector
+    environment:
+      - PHOENIX_WORKING_DIR=/phoenix
+    volumes:
+      - phoenix_data:/phoenix
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6006/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
   api:
     build:
       context: .
@@ -26,10 +41,17 @@ services:
     environment:
       # Override for docker networking
       POSTGRES__CONNECTION_STRING: postgresql://remlight:remlight@postgres:5432/remlight
+      # OTEL - Send traces to Phoenix
+      OTEL__ENABLED: "true"
+      OTEL__COLLECTOR_ENDPOINT: http://phoenix:6006
+      OTEL__PROTOCOL: http
+      OTEL__SERVICE_NAME: remlight-api
     ports:
       - "8080:8000"
     depends_on:
       postgres:
+        condition: service_healthy
+      phoenix:
         condition: service_healthy
     volumes:
       # Mount source for development hot reload
@@ -38,6 +60,7 @@ services:
 
 volumes:
   postgres_data:
+  phoenix_data:
 
 networks:
   default:

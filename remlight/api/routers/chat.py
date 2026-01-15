@@ -13,10 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from remlight.agentic import AgentContext, create_agent, schema_from_yaml
-from remlight.api.streaming import (
-    stream_agent_response_with_save,
-    save_user_message,
-)
+from remlight.agentic.streaming import save_user_message, stream_sse_with_save
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -161,7 +158,7 @@ async def chat_completions(
 
     if request.stream:
         return StreamingResponse(
-            stream_agent_response_with_save(
+            stream_sse_with_save(
                 agent=agent_runtime.agent,
                 prompt=prompt,
                 model=request.model,
