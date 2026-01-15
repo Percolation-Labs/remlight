@@ -15,6 +15,7 @@ Knowledge base for REMLight - a declarative agent framework with PostgreSQL memo
 
 | Document | Description |
 | -------- | ----------- |
+| [Declarative Agents](./design/declarative-agents.md) | Why agents are trivially declarative |
 | [Architecture](./design/architecture.md) | System components and data flow |
 | [Entities](./design/entities.md) | Database entity types |
 

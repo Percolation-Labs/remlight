@@ -10,7 +10,7 @@ Minimal declarative agent framework with PostgreSQL memory and multi-agent suppo
 - **Multi-Agent Orchestration**: Child agents stream through parent
 - **OpenAI-compatible API**: Streaming SSE responses
 - **CLI**: `ask`, `query`, and `ingest` commands
-- **Sample Ontology**: AI/ML knowledge base for testing
+- **Sample Ontology**: Self-documenting knowledge base
 
 ## Quick Start
 
@@ -56,12 +56,12 @@ rem serve
 ```bash
 # Ask an agent
 rem ask "What is machine learning?"
-rem ask "Find documents about AI" --schema schemas/query-agent.yaml
+rem ask "Find documents" --schema query-agent
 
 # Execute REM query
-rem query "LOOKUP transformer"
-rem query "SEARCH neural networks IN ontology"
-rem query "FUZZY backprop algorithm"
+rem query "LOOKUP architecture"
+rem query "SEARCH agent schema IN ontology"
+rem query "FUZZY query"
 
 # Ingest ontology files
 rem ingest ontology/
@@ -76,16 +76,16 @@ rem install
 
 ## REM Query Examples
 
-After ingesting the sample ontology, test REM queries:
+After ingesting the ontology, test REM queries:
 
 ### LOOKUP - O(1) Exact Key Match
 
 ```bash
 # Lookup by entity_key (from YAML frontmatter)
-rem query "LOOKUP transformer"
-rem query "LOOKUP deep-learning"
-rem query "LOOKUP gpt"
-rem query "LOOKUP attention"
+rem query "LOOKUP architecture"
+rem query "LOOKUP rem-query"
+rem query "LOOKUP cli"
+rem query "LOOKUP multi-agent"
 ```
 
 Returns exact match from kv_store in O(1) time.
@@ -94,10 +94,9 @@ Returns exact match from kv_store in O(1) time.
 
 ```bash
 # Vector similarity search in ontology table
-rem query "SEARCH neural networks IN ontology"
-rem query "SEARCH language models IN ontology"
-rem query "SEARCH gradient descent optimization IN ontology"
-rem query "SEARCH attention mechanism transformers IN ontology"
+rem query "SEARCH agent schema IN ontology"
+rem query "SEARCH message persistence IN ontology"
+rem query "SEARCH multi-agent orchestration IN ontology"
 ```
 
 Returns top results ranked by embedding cosine similarity.
@@ -106,64 +105,49 @@ Returns top results ranked by embedding cosine similarity.
 
 ```bash
 # Fuzzy text search (handles typos)
-rem query "FUZZY transfomer architecture"  # typo: transfomer
-rem query "FUZZY bert language model"
-rem query "FUZZY backprop algorithm"
-rem query "FUZZY llama meta ai"
+rem query "FUZZY archtecture"  # typo: archtecture
+rem query "FUZZY mesages"      # typo: mesages
 ```
 
 Uses PostgreSQL trigram similarity for approximate matching.
 
 ## Sample Ontology
 
-REMLight includes a sample AI/ML ontology with interlinked entities:
+REMLight includes self-documenting ontology with interlinked entities:
 
 ```
 ontology/
-├── README.md              # Ontology documentation
-├── scripts/
-│   └── verify_links.py    # Link validation
-├── concepts/              # Core concepts
-│   ├── machine-learning.md
-│   ├── deep-learning.md
-│   ├── neural-network.md
-│   ├── supervised-learning.md
-│   └── unsupervised-learning.md
-├── models/                # Model architectures
-│   ├── transformer.md
-│   ├── gpt.md
-│   ├── bert.md
-│   └── llama.md
-└── techniques/            # Training techniques
-    ├── backpropagation.md
-    └── attention.md
+├── README.md                # Main index
+├── design/
+│   ├── architecture.md      # System architecture
+│   └── entities.md          # Database entity types
+├── reference/
+│   ├── rem-query.md         # Query language spec
+│   ├── agent-schema.md      # YAML schema format
+│   ├── mcp-tools.md         # Available tools
+│   └── messages.md          # Message persistence
+└── guides/
+    ├── quick-start.md       # Installation
+    ├── cli.md               # CLI commands
+    └── multi-agent.md       # Multi-agent orchestration
 ```
 
 ### Entity Linking
 
-Entities link to each other using wiki syntax:
+Each page has a "See also" section with REM LOOKUP hints for graph traversal:
 
 ```markdown
-[[entity-key|Display Text]]
-```
+## See also
 
-Example from `transformer.md`:
-```markdown
-The [[attention|attention mechanism]] allows models to focus on
-relevant parts of the input. This powers [[gpt|GPT]] and [[bert|BERT]].
-```
-
-### Verify Links
-
-```bash
-python ontology/scripts/verify_links.py
+- `REM LOOKUP architecture` - System architecture
+- `REM LOOKUP rem-query` - Query language reference
 ```
 
 ## How the Ontology Loader Works
 
 The `rem ingest` command processes markdown files:
 
-1. **Parse Frontmatter**: Extract YAML metadata (entity_key, title, parent, etc.)
+1. **Parse Frontmatter**: Extract YAML metadata (entity_key, title, tags, etc.)
 2. **Generate Entity Key**: Uses `entity_key` from frontmatter, or filename
 3. **Store Content**: Full markdown stored in `ontology` table
 4. **Generate Embeddings**: Content embedded for SEARCH queries
@@ -172,16 +156,16 @@ The `rem ingest` command processes markdown files:
 ```
 rem ingest ontology/
     │
-    ├── Parse: machine-learning.md
-    │   └── entity_key: machine-learning
+    ├── Parse: architecture.md
+    │   └── entity_key: architecture
     │   └── content: Full markdown
-    │   └── properties: {parent, children, related, tags}
+    │   └── properties: {tags, related}
     │
     ├── Store in ontology table
     │   └── Generate embedding for content
     │
     └── Index in kv_store
-        └── key: machine-learning → {name, content, metadata}
+        └── key: architecture → {name, content, metadata}
 ```
 
 ## Agent Schema (YAML)
@@ -281,12 +265,11 @@ The streaming architecture prevents content duplication - when child content is 
 
 ## Database Tables
 
-- `ontology` - Domain entities (concepts, models, techniques)
+- `ontology` - Knowledge base entities with embeddings
 - `resources` - Documents and content chunks
 - `sessions` - Conversation sessions
 - `messages` - Chat messages
 - `kv_store` - Key-value lookup cache for O(1) LOOKUP
-- `embedding_queue` - Queue for async embedding generation
 
 ## REM Functions (PostgreSQL)
 
@@ -323,15 +306,16 @@ remlight/
 ├── pyproject.toml
 ├── Dockerfile
 ├── docker-compose.yml
-├── ontology/                # Sample AI/ML knowledge base
-│   ├── concepts/
-│   ├── models/
-│   ├── techniques/
-│   └── scripts/verify_links.py
+├── ontology/                # Self-documenting knowledge base
+│   ├── design/              # Architecture docs
+│   ├── reference/           # API reference
+│   └── guides/              # How-to guides
 ├── sql/
 │   └── install.sql          # Tables, triggers, functions
 ├── schemas/
-│   └── query-agent.yaml     # Sample agent
+│   ├── query-agent.yaml     # Search agent
+│   ├── action-agent.yaml    # Observation agent
+│   └── orchestrator-agent.yaml
 └── remlight/
     ├── settings.py          # Environment config
     ├── models/
@@ -340,8 +324,6 @@ remlight/
     ├── agentic/
     │   ├── schema.py        # AgentSchema + YAML
     │   ├── provider.py      # Pydantic AI agent creation
-    │   ├── context.py       # AgentContext + event sink
-    │   ├── otel.py          # OpenTelemetry/Phoenix setup
     │   └── streaming/       # SSE streaming with child agent support
     ├── api/
     │   ├── main.py          # FastAPI app
