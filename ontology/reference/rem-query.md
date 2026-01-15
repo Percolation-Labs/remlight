@@ -16,7 +16,7 @@ Exact key-value lookup.
 
 ```bash
 rem query "LOOKUP my-entity"
-rem query "LOOKUP user-123, user-456"  # multiple keys
+rem query "LOOKUP user-123"
 ```
 
 ### SEARCH - O(log n)
@@ -25,7 +25,7 @@ Semantic vector search using pgvector.
 
 ```bash
 rem query "SEARCH machine learning IN ontology"
-rem query "SEARCH project planning IN resources LIMIT 5"
+rem query "SEARCH project planning IN resources"
 ```
 
 ### FUZZY - O(n)
@@ -34,15 +34,20 @@ Trigram text matching. Handles typos.
 
 ```bash
 rem query "FUZZY transfomrer"  # finds "transformer"
-rem query "FUZZY backprop THRESHOLD 0.5"
+rem query "FUZZY backprop"
 ```
 
-### SQL
+### SQL (Python API only)
 
-Direct SQL access.
+Direct SQL access via Python API.
 
-```bash
-rem query "SQL SELECT * FROM resources WHERE created_at > '2024-01-01'"
+```python
+from remlight.models.rem_query import RemQuery, QueryType, SQLParameters
+
+query = RemQuery(
+    query_type=QueryType.SQL,
+    parameters=SQLParameters(raw_query="SELECT * FROM resources WHERE created_at > '2024-01-01'")
+)
 ```
 
 ### TRAVERSE - O(k)
@@ -72,3 +77,9 @@ query = RemQuery(
     parameters=LookupParameters(key="my-entity")
 )
 ```
+
+## See also
+
+- `REM LOOKUP cli` - CLI commands for queries
+- `REM LOOKUP entities` - Entity types that can be queried
+- `REM LOOKUP mcp-tools` - Tools that use REM queries

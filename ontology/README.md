@@ -25,6 +25,7 @@ Knowledge base for REMLight - a declarative agent framework with PostgreSQL memo
 | [REM Query](./reference/rem-query.md) | Query language specification |
 | [Agent Schema](./reference/agent-schema.md) | YAML schema format |
 | [MCP Tools](./reference/mcp-tools.md) | Available tools |
+| [Messages](./reference/messages.md) | Message persistence |
 
 ### [Guides](./guides/)
 
@@ -32,6 +33,7 @@ Knowledge base for REMLight - a declarative agent framework with PostgreSQL memo
 | -------- | ----------- |
 | [Quick Start](./guides/quick-start.md) | Installation and setup |
 | [CLI](./guides/cli.md) | Command line usage |
+| [Multi-Agent](./guides/multi-agent.md) | Multi-agent orchestration |
 
 ## Quick Start
 

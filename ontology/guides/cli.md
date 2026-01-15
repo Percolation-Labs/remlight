@@ -14,7 +14,7 @@ Ask an agent a question.
 
 ```bash
 rem ask "What is machine learning?"
-rem ask "Find docs" --schema query-agent.yaml
+rem ask "Find docs" --schema query-agent
 rem ask "Hello" --model openai:gpt-4o
 rem ask "Hello" --no-stream
 ```
@@ -76,3 +76,10 @@ rem install
 ```
 
 Creates tables: ontology, resources, sessions, messages, kv_store.
+
+## See also
+
+- `REM LOOKUP rem-query` - Query language reference
+- `REM LOOKUP agent-schema` - Agent YAML schema format
+- `REM LOOKUP quick-start` - Installation guide
+- `REM LOOKUP multi-agent` - Multi-agent examples

@@ -68,3 +68,9 @@ await repo.upsert(entity, embeddable_fields=["content"], generate_embeddings=Tru
 ```
 
 Uses `text-embedding-3-small` (1536 dimensions).
+
+## See also
+
+- `REM LOOKUP architecture` - System architecture
+- `REM LOOKUP messages` - Message persistence
+- `REM LOOKUP rem-query` - Query language for entities

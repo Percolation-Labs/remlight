@@ -77,3 +77,9 @@ ask_agent("query-agent", "Find docs")
     ├── child_content ─────► SSE: content chunks
     └── child_tool_result ─► SSE: tool_call complete
 ```
+
+## See also
+
+- `REM LOOKUP rem-query` - Query language used by search tool
+- `REM LOOKUP agent-schema` - Agent schema with tools config
+- `REM LOOKUP multi-agent` - Multi-agent orchestration guide

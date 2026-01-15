@@ -44,3 +44,10 @@ User Input → CLI/API → Agent Runner → Pydantic AI Agent → PostgreSQL
 - **FastAPI**: HTTP API
 - **asyncpg**: PostgreSQL driver
 - **pgvector**: Vector similarity search
+
+## See also
+
+- `REM LOOKUP entities` - Database entity types
+- `REM LOOKUP agent-schema` - YAML agent definition
+- `REM LOOKUP rem-query` - Query language reference
+- `REM LOOKUP cli` - Command line usage

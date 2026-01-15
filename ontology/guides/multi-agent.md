@@ -12,13 +12,13 @@ Running multiple agents with `ask_agent` tool.
 
 ```bash
 # Action agent - records observations
-rem ask "Record that the system is healthy" --schema schemas/action-agent.yaml
+rem ask "Record that the system is healthy" --schema action-agent
 
 # Query agent - searches knowledge base
-rem ask "What is machine learning?" --schema schemas/query-agent.yaml
+rem ask "What is machine learning?" --schema query-agent
 
 # Orchestrator - delegates to worker agents
-rem ask "Research neural networks" --schema schemas/orchestrator-agent.yaml
+rem ask "Research neural networks" --schema orchestrator-agent
 ```
 
 ## Agent Schemas
@@ -91,3 +91,9 @@ curl -X POST http://localhost:8000/api/v1/chat/completions \
   -H "X-Agent-Schema: orchestrator-agent" \
   -d '{"messages":[{"role":"user","content":"Research attention mechanisms"}]}'
 ```
+
+## See also
+
+- `REM LOOKUP mcp-tools` - Tools: search, action, ask_agent
+- `REM LOOKUP agent-schema` - Agent schema format
+- `REM LOOKUP messages` - Message persistence in sessions

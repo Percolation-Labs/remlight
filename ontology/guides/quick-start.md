@@ -60,3 +60,9 @@ OPENAI_API_KEY=sk-...
 | `/api/v1/mcp` | POST | MCP protocol |
 
 API docs at `http://localhost:8000/docs`
+
+## See also
+
+- `REM LOOKUP cli` - Full CLI reference
+- `REM LOOKUP architecture` - System architecture
+- `REM LOOKUP entities` - Database entity types

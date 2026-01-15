@@ -79,3 +79,9 @@ runtime = await create_agent(schema=schema, tools=tools)
 ```
 
 Or via CLI: `rem ask "Hello" --schema agent.yaml`
+
+## See also
+
+- `REM LOOKUP mcp-tools` - Available tools for agents
+- `REM LOOKUP multi-agent` - Multi-agent orchestration
+- `REM LOOKUP cli` - CLI usage with schemas

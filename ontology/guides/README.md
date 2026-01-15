@@ -8,3 +8,4 @@ How-to guides for using REMLight.
 | -------- | ----------- |
 | [Quick Start](./quick-start.md) | Installation and setup |
 | [CLI](./cli.md) | Command line usage |
+| [Multi-Agent](./multi-agent.md) | Multi-agent orchestration |
