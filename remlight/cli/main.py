@@ -23,7 +23,7 @@ def cli():
 @click.option("--schema", "-s", help="Path to agent schema YAML file or agent name")
 @click.option("--user-id", "-u", default="cli-user", help="User ID for queries")
 @click.option("--session", help="Session UUID for multi-turn conversations")
-@click.option("--model", "-m", help="Model to use (e.g., openai:gpt-4o-mini)")
+@click.option("--model", "-m", help="Model to use (e.g., openai:gpt-4.1)")
 @click.option("--stream/--no-stream", default=True, help="Stream output")
 def ask(query: str, schema: str | None, user_id: str, session: str | None, model: str | None, stream: bool):
     """
@@ -32,7 +32,7 @@ def ask(query: str, schema: str | None, user_id: str, session: str | None, model
     Examples:
         rem ask "What is machine learning?"
         rem ask "Find documents about AI" --schema query-agent
-        rem ask "Search for projects" --model openai:gpt-4o
+        rem ask "Search for projects" --model openai:gpt-4.1
 
     Multi-turn conversations (session must be a UUID):
         rem ask "What is REM?" --session 550e8400-e29b-41d4-a716-446655440000
@@ -189,7 +189,14 @@ async def _query_async(query_str: str, user_id: str | None, limit: int):
     from remlight.services.database import get_db
 
     db = get_db()
-    await db.connect()
+    try:
+        await db.connect()
+    except Exception as e:
+        click.echo(f"Error: Could not connect to database: {e}", err=True)
+        click.echo("The query command requires a running PostgreSQL database.", err=True)
+        click.echo("Start with: docker compose up -d postgres", err=True)
+        return
+
     init_tools(db)
 
     result = await search(query=query_str, limit=limit, user_id=user_id)

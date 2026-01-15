@@ -8,7 +8,8 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # pg18+ requires mount at /var/lib/postgresql (not /data subdirectory)
+      - postgres_data:/var/lib/postgresql
       # Auto-run install.sql on first startup
       - ./sql/install.sql:/docker-entrypoint-initdb.d/01-install.sql
     healthcheck:

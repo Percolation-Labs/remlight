@@ -46,7 +46,7 @@ class PostgresSettings(BaseModel):
 class LLMSettings(BaseModel):
     """LLM provider settings."""
 
-    default_model: str = os.getenv("LLM__DEFAULT_MODEL", "openai:gpt-4o-mini")
+    default_model: str = os.getenv("LLM__DEFAULT_MODEL", "openai:gpt-4.1")
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
     anthropic_api_key: str | None = os.getenv("ANTHROPIC_API_KEY")
     temperature: float = float(os.getenv("LLM__TEMPERATURE", "0.5"))

@@ -15,7 +15,7 @@ Ask an agent a question.
 ```bash
 rem ask "What is machine learning?"
 rem ask "Find docs" --schema query-agent
-rem ask "Hello" --model openai:gpt-4o
+rem ask "Hello" --model openai:gpt-4.1
 rem ask "Hello" --no-stream
 ```
 

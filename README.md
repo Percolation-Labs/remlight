@@ -292,7 +292,7 @@ The streaming architecture prevents content duplication - when child content is 
 POSTGRES__CONNECTION_STRING=postgresql://user:pass@host:5432/db
 
 # LLM
-LLM__DEFAULT_MODEL=openai:gpt-4o-mini
+LLM__DEFAULT_MODEL=openai:gpt-4.1
 LLM__TEMPERATURE=0.5
 LLM__MAX_ITERATIONS=20
 OPENAI_API_KEY=sk-...

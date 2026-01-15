@@ -10,7 +10,6 @@ api/
 ├── __init__.py         # Module exports
 ├── main.py             # FastAPI application (REST API)
 ├── mcp_main.py         # MCP server (stdio + HTTP)
-├── streaming.py        # SSE streaming utilities
 └── routers/
     ├── __init__.py     # Router exports
     ├── chat.py         # OpenAI-compatible chat completions
@@ -60,7 +59,6 @@ result = await search("LOOKUP sarah-chen")
 | `routers/tools.py` | Tool implementations |
 | `routers/chat.py` | OpenAI-compatible chat |
 | `routers/query.py` | Direct query execution |
-| `streaming.py` | SSE event formatting |
 
 ## Endpoints
 
@@ -189,7 +187,7 @@ REMLight uses standard HTTP headers for context propagation. These headers are a
 | `X-Session-Id` | string | `null` | Session/conversation identifier for multi-turn context. Messages are stored and retrieved by session. |
 | `X-Tenant-Id` | string | `"default"` | Tenant identifier for multi-tenancy isolation. Used for REM data partitioning. |
 | `X-Agent-Schema` | string | `null` | Agent schema name or file path. Determines which agent handles the request. |
-| `X-Model-Name` | string | config default | LLM model override (e.g., `openai:gpt-4o`, `anthropic:claude-sonnet-4-5-20250929`). |
+| `X-Model-Name` | string | config default | LLM model override (e.g., `openai:gpt-4.1`, `anthropic:claude-sonnet-4-5-20250929`). |
 | `X-Client-Id` | string | `null` | Client identifier for analytics (e.g., `web`, `mobile`, `cli`, `api`). |
 | `X-Is-Eval` | boolean | `false` | Marks session as evaluation. Accepts `true`, `1`, or `yes` as truthy. |
 
@@ -219,6 +217,46 @@ curl -X POST http://localhost:8000/api/v1/chat/completions \
   -H "X-Agent-Schema: query-agent" \
   -H "X-Client-Id: web" \
   -d '{"messages": [{"role": "user", "content": "Hello"}], "stream": true}'
+```
+
+### Multi-Agent SSE Streaming
+
+Test multi-agent orchestration with SSE streaming:
+
+```bash
+# Start the server first: rem serve
+
+# Test orchestrator agent (delegates to worker-agent)
+curl -N -X POST http://localhost:8000/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-Agent-Schema: orchestrator-agent" \
+  -d '{"messages": [{"role": "user", "content": "Count to 3"}], "stream": true}'
+```
+
+Expected SSE events:
+
+```
+event: progress
+data: {"type":"progress","step":1,"total_steps":3,"label":"Processing request"}
+
+event: tool_call
+data: {"type":"tool_call","tool_name":"ask_agent","status":"started",...}
+
+data: {"choices":[{"delta":{"content":"The worker..."}}]}
+
+event: tool_call
+data: {"type":"tool_call","tool_name":"ask_agent","status":"completed",...}
+
+event: done
+data: {"type":"done","reason":"stop"}
+
+data: [DONE]
+```
+
+CLI equivalent:
+
+```bash
+rem ask "Count to 3" --schema orchestrator-agent
 ```
 
 ## Adding New Tools

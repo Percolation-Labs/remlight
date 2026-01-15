@@ -230,7 +230,7 @@ async def create_agent(
 
     Args:
         schema: Agent schema (dict or AgentSchema)
-        model_name: Model identifier (e.g., "openai:gpt-4o-mini")
+        model_name: Model identifier (e.g., "openai:gpt-4.1")
         tools: List of tool functions to make available
         context: Agent execution context (includes user_profile_hint)
 

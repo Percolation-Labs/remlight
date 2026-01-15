@@ -105,7 +105,7 @@ OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 
 # LLM Configuration
-LLM__DEFAULT_MODEL=openai:gpt-4o-mini
+LLM__DEFAULT_MODEL=openai:gpt-4.1
 LLM__TEMPERATURE=0.5
 
 # Database

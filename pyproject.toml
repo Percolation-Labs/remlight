@@ -3,6 +3,7 @@ name = "remlight"
 version = "0.1.0"
 description = "Minimal declarative agent framework with PostgreSQL memory"
 readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.10",
