@@ -9,13 +9,21 @@ from remlight.models.core import CoreModel
 
 
 class Ontology(CoreModel):
-    """Domain entity: people, projects, concepts with semantic links."""
+    """Domain entity: people, projects, concepts with semantic links.
 
-    name: str
+    Used for wiki-style knowledge bases with:
+    - entity_key (name): Unique identifier for LOOKUP queries
+    - content: Full markdown content for SEARCH/FUZZY queries
+    - properties: YAML frontmatter metadata (parent, children, related, tags)
+    """
+
+    name: str  # entity_key from frontmatter
+    content: str | None = None  # Full markdown content
     description: str | None = None
     category: str | None = None
     entity_type: str | None = None
-    properties: dict[str, Any] = Field(default_factory=dict)
+    uri: str | None = None  # Source file URI
+    properties: dict[str, Any] = Field(default_factory=dict)  # Frontmatter metadata
 
 
 class Resource(CoreModel):

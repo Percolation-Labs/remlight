@@ -515,8 +515,11 @@ async def ask_agent(
         "input_text": input_text,
     }
 
-    if not use_streaming or not streamed_content:
-        response["text_response"] = str(result.output) if hasattr(result, "output") else str(result)
+    # Add text_response: prefer streamed content, fallback to result.output
+    if use_streaming and streamed_content:
+        response["text_response"] = streamed_content
+    elif hasattr(result, "output") and result.output is not None:
+        response["text_response"] = str(result.output)
 
     return response
 

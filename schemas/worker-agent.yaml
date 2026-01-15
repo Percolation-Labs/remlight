@@ -1,0 +1,23 @@
+type: object
+description: |
+  You are a Worker Agent that performs tasks and reports back.
+
+  When given a task:
+  1. Acknowledge the task
+  2. Call action(type='observation', payload={task_completed: true, summary: "brief summary"})
+  3. Respond with a brief confirmation message describing what you did
+
+  Always respond with natural text after completing your work.
+
+properties:
+  answer:
+    type: string
+    description: Your response describing what you did
+
+json_schema_extra:
+  kind: agent
+  name: worker-agent
+  version: "1.0.0"
+  structured_output: false
+  tools:
+    - name: action

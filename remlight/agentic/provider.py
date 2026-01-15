@@ -86,20 +86,40 @@ async def create_agent(
     temperature = meta.override_temperature or settings.llm.temperature
     max_iterations = meta.override_max_iterations or settings.llm.max_iterations
 
-    # Build output model if structured output
-    output_type = None
-    if meta.structured_output is not False and schema.properties:
+    # Build output model if structured output is enabled
+    # When structured_output: false or no properties, use str (pydantic-ai text mode)
+    # When structured_output: true with properties, use generated Pydantic model
+    output_type: type | None = str  # Default: text output mode
+    if meta.structured_output is True and schema.properties:
         output_type = _build_output_model(schema.properties, schema.required)
 
     # Create system prompt with user profile hint
     system_prompt = _build_system_prompt(schema, context)
 
-    # Convert tools: FastMCP returns dict of FunctionTool, pydantic-ai needs list of callables
+    # Filter and convert tools based on schema configuration
+    # Schema tools list specifies which tools this agent can access:
+    # - tools: [] = NO tools allowed
+    # - tools: [{name: "x"}] = only tool "x" allowed
+    # - tools not specified (empty) = ALL tools allowed
     agent_tools = []
+    schema_tools = meta.tools  # List of MCPToolReference or dicts
+    has_tool_filter = len(schema_tools) > 0 if schema_tools else False
+
+    # Extract tool names from schema - handle both MCPToolReference objects and dicts
+    allowed_tool_names: set[str] = set()
+    for t in (schema_tools or []):
+        if hasattr(t, "name"):  # MCPToolReference
+            allowed_tool_names.add(t.name)
+        elif isinstance(t, dict) and "name" in t:  # dict
+            allowed_tool_names.add(t["name"])
+
     if tools:
         if isinstance(tools, dict):
             # FastMCP format: {name: FunctionTool}
-            for tool in tools.values():
+            for name, tool in tools.items():
+                # Filter: if schema specifies tools, only include those listed
+                if has_tool_filter and name not in allowed_tool_names:
+                    continue
                 if hasattr(tool, "fn"):
                     agent_tools.append(tool.fn)
                 elif callable(tool):
@@ -107,6 +127,10 @@ async def create_agent(
         elif isinstance(tools, list):
             # Already a list - extract callables
             for tool in tools:
+                tool_name = getattr(tool, "__name__", None) or getattr(tool, "name", None)
+                # Filter: if schema specifies tools, only include those listed
+                if has_tool_filter and tool_name and tool_name not in allowed_tool_names:
+                    continue
                 if hasattr(tool, "fn"):
                     agent_tools.append(tool.fn)
                 elif callable(tool):

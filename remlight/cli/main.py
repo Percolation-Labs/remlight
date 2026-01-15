@@ -203,6 +203,141 @@ def serve(host: str, port: int, reload: bool):
 
 
 @cli.command()
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--table", "-t", default="ontology", help="Target table (default: ontology)")
+@click.option("--pattern", "-p", default="**/*.md", help="Glob pattern (default: **/*.md)")
+@click.option("--dry-run", is_flag=True, help="Preview without making changes")
+def ingest(path: str, table: str, pattern: str, dry_run: bool):
+    """
+    Ingest markdown files into REM database.
+
+    Parses markdown files with YAML frontmatter and stores them with embeddings
+    for semantic search.
+
+    Examples:
+        rem ingest ontology/
+        rem ingest ontology/ --dry-run
+        rem ingest ontology/concepts/ --pattern "*.md"
+        rem ingest docs/ --table resources
+    """
+    asyncio.run(_ingest_async(path, table, pattern, dry_run))
+
+
+async def _ingest_async(path: str, table: str, pattern: str, dry_run: bool):
+    """Async implementation of ingest command."""
+    import re
+    import yaml
+    from remlight.services.database import get_db
+    from remlight.services.repository import Repository
+    from remlight.models.entities import Ontology, Resource
+
+    input_path = Path(path)
+
+    # Collect files to process
+    if input_path.is_dir():
+        files = list(input_path.glob(pattern))
+        # Skip README.md and scripts/
+        files = [
+            f for f in files
+            if f.name != "README.md" and "scripts" not in f.parts
+        ]
+    else:
+        files = [input_path]
+
+    if not files:
+        click.echo(f"No files matching '{pattern}' found in {input_path}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Found {len(files)} files")
+
+    if dry_run:
+        click.echo("\nDRY RUN - Would ingest:")
+        for f in files[:20]:
+            entity_key = _extract_entity_key(f)
+            click.echo(f"  {f.name} → {table} (key: {entity_key})")
+        if len(files) > 20:
+            click.echo(f"  ... and {len(files) - 20} more")
+        return
+
+    # Connect to database
+    db = get_db()
+    await db.connect()
+
+    try:
+        # Select model based on table
+        if table == "ontology":
+            model_class = Ontology
+        elif table == "resources":
+            model_class = Resource
+        else:
+            click.echo(f"Unknown table: {table}", err=True)
+            sys.exit(1)
+
+        repo = Repository(model_class, table_name=table)
+        processed = 0
+        failed = 0
+
+        for file_path in files:
+            try:
+                content = file_path.read_text(encoding="utf-8")
+                entity_key = _extract_entity_key(file_path, content)
+                frontmatter = _parse_frontmatter(content)
+
+                # Build entity
+                entity_data = {
+                    "name": entity_key,
+                    "content": content,
+                    "uri": f"file://{file_path.absolute()}",
+                    "properties": frontmatter or {},
+                    "tags": frontmatter.get("tags", []) if frontmatter else [],
+                }
+
+                if frontmatter:
+                    entity_data["description"] = frontmatter.get("title", entity_key)
+                    entity_data["category"] = frontmatter.get("parent")
+
+                entity = model_class(**entity_data)
+                await repo.upsert(entity, embeddable_fields=["content"], generate_embeddings=True)
+                processed += 1
+                click.echo(f"  ✓ {entity_key}")
+
+            except Exception as e:
+                failed += 1
+                click.echo(f"  ✗ {file_path.name}: {e}", err=True)
+
+        click.echo(f"\nCompleted: {processed} succeeded, {failed} failed")
+
+    finally:
+        await db.disconnect()
+
+
+def _extract_entity_key(file_path: Path, content: str | None = None) -> str:
+    """Extract entity key from frontmatter or filename."""
+    if content:
+        frontmatter = _parse_frontmatter(content)
+        if frontmatter and frontmatter.get("entity_key"):
+            return frontmatter["entity_key"]
+    return file_path.stem
+
+
+def _parse_frontmatter(content: str) -> dict | None:
+    """Parse YAML frontmatter from markdown content."""
+    import re
+    try:
+        import yaml
+    except ImportError:
+        return None
+
+    match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
+    if not match:
+        return None
+    try:
+        return yaml.safe_load(match.group(1))
+    except Exception:
+        return None
+
+
+@cli.command()
 def install():
     """Install database schema (tables, triggers, functions)."""
     asyncio.run(_install_async())
