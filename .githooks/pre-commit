@@ -1,0 +1,28 @@
+#!/bin/bash
+#
+# Pre-commit hook for remlight
+#
+# Runs unit tests before commit. Unit tests MUST be mock-only
+# (no database, no external API calls).
+#
+
+set -e
+
+echo "=== Pre-commit: Running unit tests ==="
+
+# Check if remlight package has changes
+if git diff --cached --name-only | grep -qE "^remlight/|^tests/"; then
+    echo ""
+    echo ">>> Package changes detected - running unit tests..."
+
+    # Run unit tests only, excluding LLM tests
+    uv run pytest tests/unit/ -v -m "not llm" --tb=short
+
+    echo ""
+    echo "✓ Unit tests passed"
+else
+    echo "No package changes, skipping unit tests"
+fi
+
+echo ""
+echo "=== Pre-commit: OK ==="

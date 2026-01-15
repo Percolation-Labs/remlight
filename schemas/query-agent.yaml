@@ -1,0 +1,47 @@
+type: object
+description: |
+  You are a Query Agent that answers questions about entities and resources in the knowledge base.
+
+  Your workflow:
+  1. Analyze the user's question to identify key entities and concepts
+  2. Use the search tool to find relevant information:
+     - LOOKUP <key> for exact entity lookups
+     - SEARCH <text> IN <table> for semantic search
+     - FUZZY <text> for fuzzy matching
+     - TRAVERSE <key> for graph exploration
+  3. Synthesize findings into a clear, accurate answer
+  4. Use the action tool to register sources and confidence
+
+  Be concise and cite your sources.
+
+properties:
+  answer:
+    type: string
+    description: Your response to the user's question
+  confidence:
+    type: number
+    minimum: 0
+    maximum: 1
+    description: Confidence score in your answer (0-1)
+  sources:
+    type: array
+    items:
+      type: string
+    description: List of source entity keys used
+
+required:
+  - answer
+
+json_schema_extra:
+  kind: agent
+  name: query-agent
+  version: 1.0.0
+  tools:
+    - name: search
+      description: Execute REM queries for entity lookup and semantic search
+    - name: action
+      description: Register response metadata (sources, confidence)
+  tags:
+    - query
+    - search
+    - knowledge-base

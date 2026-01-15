@@ -1,0 +1,20 @@
+type: object
+description: |
+  You are an Action Agent that records observations.
+  When invoked, extract key information and call action(type='observation', payload={...}).
+  Be concise in your response.
+
+properties:
+  observation:
+    type: string
+    description: Brief summary of what was observed
+
+required:
+  - observation
+
+json_schema_extra:
+  kind: agent
+  name: action-agent
+  version: 1.0.0
+  tools:
+    - name: action

@@ -1,0 +1,50 @@
+#!/bin/bash
+#
+# Pre-push hook for remlight
+#
+# Runs integration tests before push using dockerized database.
+# Skips:
+# - LLM tests (expensive, require API keys)
+# - Tests with event loop conflicts
+#
+
+set -e
+
+echo "=== Pre-push: Running integration tests ==="
+
+echo ""
+echo ">>> Starting test database..."
+docker compose -f docker-compose.test.yml up -d
+
+echo ">>> Waiting for database to be ready..."
+for i in {1..30}; do
+    if docker exec remlight-postgres-test pg_isready -U remlight > /dev/null 2>&1; then
+        echo "Database ready"
+        break
+    fi
+    if [ $i -eq 30 ]; then
+        echo "Database failed to start"
+        docker compose -f docker-compose.test.yml down -v
+        exit 1
+    fi
+    sleep 1
+done
+
+echo ""
+echo ">>> Running integration tests (skipping LLM tests)..."
+POSTGRES__CONNECTION_STRING="postgresql://remlight:remlight@localhost:5433/remlight" \
+    uv run pytest tests/integration/ -v -m "not llm" --tb=short || {
+        echo ""
+        echo ">>> Stopping test database..."
+        docker compose -f docker-compose.test.yml down -v
+        exit 1
+    }
+
+echo ""
+echo ">>> Stopping test database..."
+docker compose -f docker-compose.test.yml down -v
+
+echo ""
+echo "✓ Integration tests passed"
+echo ""
+echo "=== Pre-push: OK ==="

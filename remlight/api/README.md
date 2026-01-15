@@ -1,0 +1,272 @@
+# REMLight API
+
+This module provides both a **FastAPI REST server** and an **MCP server** that share the same tool implementations.
+
+## Architecture
+
+```
+api/
+├── README.md           # This file
+├── __init__.py         # Module exports
+├── main.py             # FastAPI application (REST API)
+├── mcp_main.py         # MCP server (stdio + HTTP)
+├── streaming.py        # SSE streaming utilities
+└── routers/
+    ├── __init__.py     # Router exports
+    ├── chat.py         # OpenAI-compatible chat completions
+    ├── query.py        # REM query endpoint
+    └── tools.py        # Tool functions (shared with MCP)
+```
+
+## Design Principles
+
+### 1. Single Source of Truth for Tools
+
+Tools are defined **once** in `routers/tools.py` as async functions:
+
+```python
+# routers/tools.py
+async def search(query: str, limit: int = 20, user_id: str | None = None) -> dict:
+    """Execute REM queries to search the knowledge base."""
+    ...
+```
+
+These functions are then:
+- **Exposed as REST endpoints** via FastAPI router
+- **Registered with MCP** via `mcp_main.py`
+- **Callable directly** from Python code
+
+### 2. Router-Style Tool Definitions
+
+Tools follow FastAPI router conventions, making them testable and reusable:
+
+```python
+# Can be called directly
+result = await search("LOOKUP sarah-chen")
+
+# Or via REST API
+# POST /api/v1/tools/search?query=LOOKUP+sarah-chen
+
+# Or via MCP
+# Tools available in Claude Desktop, etc.
+```
+
+### 3. Clean Separation
+
+| File | Responsibility |
+|------|----------------|
+| `main.py` | FastAPI app, CORS, routing |
+| `mcp_main.py` | MCP server, tool registration |
+| `routers/tools.py` | Tool implementations |
+| `routers/chat.py` | OpenAI-compatible chat |
+| `routers/query.py` | Direct query execution |
+| `streaming.py` | SSE event formatting |
+
+## Endpoints
+
+### REST API (FastAPI)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/api/v1/chat/completions` | POST | OpenAI-compatible chat |
+| `/api/v1/query` | POST | REM query execution |
+| `/api/v1/tools/search` | POST | Search tool |
+| `/api/v1/mcp/*` | * | MCP HTTP endpoint |
+| `/docs` | GET | OpenAPI documentation |
+
+### MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `search` | Execute REM queries (LOOKUP, FUZZY, SEARCH, TRAVERSE) |
+| `action` | Emit typed action events (observation, elicit, delegate) for SSE streaming |
+| `ask_agent` | Multi-agent orchestration |
+
+### MCP Resources
+
+| Resource URI | Description |
+|--------------|-------------|
+| `user://profile/{user_id}` | Load user profile |
+| `rem://status` | System status |
+
+## Running
+
+### FastAPI Server (REST + MCP HTTP)
+
+```bash
+# Development
+uvicorn remlight.api.main:app --reload
+
+# Production
+uvicorn remlight.api.main:app --host 0.0.0.0 --port 8000
+```
+
+### MCP Server (stdio mode)
+
+For use with MCP clients like Claude Desktop:
+
+```bash
+python -m remlight.api.mcp_main
+```
+
+Or add to your Claude Desktop config:
+
+```json
+{
+  "mcpServers": {
+    "remlight": {
+      "command": "python",
+      "args": ["-m", "remlight.api.mcp_main"]
+    }
+  }
+}
+```
+
+## Usage Examples
+
+### Direct Tool Usage
+
+```python
+from remlight.api.routers import search, action, ask_agent
+
+# Search the knowledge base
+result = await search("LOOKUP sarah-chen")
+
+# Emit an observation action
+await action(type="observation", payload={"confidence": 0.85, "sources": ["doc-1"]})
+
+# Invoke another agent
+response = await ask_agent(
+    agent_name="query-agent",
+    input_text="Find documents about machine learning"
+)
+```
+
+### Chat Completions (OpenAI-compatible)
+
+```python
+import httpx
+
+async with httpx.AsyncClient() as client:
+    response = await client.post(
+        "http://localhost:8000/api/v1/chat/completions",
+        headers={
+            "X-User-Id": "user-123",
+            "X-Session-Id": "session-456",
+        },
+        json={
+            "messages": [{"role": "user", "content": "Hello"}],
+            "stream": True,
+        }
+    )
+```
+
+### REM Query
+
+```python
+import httpx
+
+async with httpx.AsyncClient() as client:
+    response = await client.post(
+        "http://localhost:8000/api/v1/query",
+        json={
+            "query": "SEARCH machine learning IN ontologies",
+            "limit": 10
+        }
+    )
+```
+
+## Standard Headers
+
+REMLight uses standard HTTP headers for context propagation. These headers are automatically extracted by `AgentContext.from_headers()` and propagated through agent invocations.
+
+### Header Reference
+
+| Header | Type | Default | Description |
+|--------|------|---------|-------------|
+| `X-User-Id` | string | `null` | User identifier for scoping, personalization, and access control. Prefer JWT-based auth when available. |
+| `X-Session-Id` | string | `null` | Session/conversation identifier for multi-turn context. Messages are stored and retrieved by session. |
+| `X-Tenant-Id` | string | `"default"` | Tenant identifier for multi-tenancy isolation. Used for REM data partitioning. |
+| `X-Agent-Schema` | string | `null` | Agent schema name or file path. Determines which agent handles the request. |
+| `X-Model-Name` | string | config default | LLM model override (e.g., `openai:gpt-4o`, `anthropic:claude-sonnet-4-5-20250929`). |
+| `X-Client-Id` | string | `null` | Client identifier for analytics (e.g., `web`, `mobile`, `cli`, `api`). |
+| `X-Is-Eval` | boolean | `false` | Marks session as evaluation. Accepts `true`, `1`, or `yes` as truthy. |
+
+### Header Propagation
+
+Headers are automatically propagated through the request lifecycle:
+
+1. **API Request** → `AgentContext.from_headers()` extracts values
+2. **Parent Agent** → Context is passed to agent creation
+3. **Child Agents** → Context is inherited via `ask_agent` tool
+4. **Session Storage** → Messages are stored with context (user_id, session_id)
+
+### Security Considerations
+
+- **Production**: Use JWT-based authentication. User ID is extracted from `request.state.user.id` (set by auth middleware).
+- **Development**: `X-User-Id` header fallback for backwards compatibility.
+- **Multi-tenancy**: `X-Tenant-Id` isolates data between tenants.
+
+### Example Request
+
+```bash
+curl -X POST http://localhost:8000/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: user-123" \
+  -H "X-Session-Id: session-456" \
+  -H "X-Tenant-Id: acme-corp" \
+  -H "X-Agent-Schema: query-agent" \
+  -H "X-Client-Id: web" \
+  -d '{"messages": [{"role": "user", "content": "Hello"}], "stream": true}'
+```
+
+## Adding New Tools
+
+1. Add the tool function to `routers/tools.py`:
+
+```python
+async def my_tool(param: str) -> dict[str, Any]:
+    """My tool description."""
+    return {"result": param}
+```
+
+2. Add REST endpoint wrapper (optional):
+
+```python
+@router.post("/my-tool")
+async def my_tool_endpoint(param: str) -> dict[str, Any]:
+    return await my_tool(param)
+```
+
+3. Register with MCP in `mcp_main.py`:
+
+```python
+mcp.tool(name="my_tool")(my_tool)
+```
+
+4. Export from `routers/__init__.py`:
+
+```python
+from remlight.api.routers.tools import my_tool
+__all__ = [..., "my_tool"]
+```
+
+## Testing
+
+Tools can be tested directly without HTTP:
+
+```python
+import pytest
+from unittest.mock import AsyncMock, patch
+
+@pytest.mark.asyncio
+async def test_search():
+    with patch("remlight.api.routers.tools.get_tools_db") as mock_db:
+        mock_db.return_value.rem_lookup = AsyncMock(return_value={"key": "value"})
+
+        result = await search("LOOKUP test-key")
+
+        assert result["status"] == "success"
+        assert result["query_type"] == "LOOKUP"
+```

@@ -1,0 +1,21 @@
+type: object
+description: |
+  You are an Orchestrator Agent that delegates tasks to specialized sub-agents.
+  For any observation request, use ask_agent to invoke the action-agent.
+  Summarize the delegation result to the user.
+
+properties:
+  summary:
+    type: string
+    description: Summary of the delegated task result
+
+required:
+  - summary
+
+json_schema_extra:
+  kind: agent
+  name: orchestrator-agent
+  version: 1.0.0
+  tools:
+    - name: ask_agent
+    - name: action
