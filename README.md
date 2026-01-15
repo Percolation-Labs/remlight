@@ -38,7 +38,7 @@ docker run -d --name remlight-pg \
   -e POSTGRES_USER=remlight \
   -e POSTGRES_PASSWORD=remlight \
   -p 5432:5432 \
-  pgvector/pgvector:pg16
+  pgvector/pgvector:pg18
 
 # Install schema
 rem install

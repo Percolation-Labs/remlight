@@ -12,7 +12,7 @@
 
 services:
   postgres:
-    image: pgvector/pgvector:pg17
+    image: pgvector/pgvector:pg18
     container_name: remlight-postgres-test
     environment:
       POSTGRES_DB: remlight
