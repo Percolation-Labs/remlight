@@ -58,6 +58,13 @@ rem serve
 rem ask "What is machine learning?"
 rem ask "Find documents" --schema query-agent
 
+# Multi-turn conversations (session must be a UUID)
+rem ask "What is REMLight?" --session 550e8400-e29b-41d4-a716-446655440000
+rem ask "Tell me more" --session 550e8400-e29b-41d4-a716-446655440000
+
+# Multi-agent orchestration
+rem ask "Count to 5" --schema orchestrator-agent
+
 # Execute REM query
 rem query "LOOKUP architecture"
 rem query "SEARCH agent schema IN ontology"
@@ -296,7 +303,38 @@ OTEL__ENABLED=true
 OTEL__COLLECTOR_ENDPOINT=http://phoenix:6006
 OTEL__SERVICE_NAME=remlight-api
 
+# Debugging
+LOGURU_LEVEL=DEBUG  # Show tool calls and results
+
 ENVIRONMENT=development
+```
+
+## Debugging
+
+Enable debug logging to see tool calls, results, and session operations:
+
+```bash
+LOGURU_LEVEL=DEBUG rem ask "Find declarative agents"
+```
+
+Output shows tool invocations and results:
+```
+Tool call: search({'query': 'declarative agents'})
+Tool result: {'status': 'success', 'results': [...]}
+```
+
+Session debugging shows message loading:
+```bash
+LOGURU_LEVEL=DEBUG rem ask "Tell me more" --session 550e8400-e29b-41d4-a716-446655440000
+```
+```
+Loaded 3 messages for session ... (compress_on_load=True)
+Loaded 3 messages -> 4 pydantic messages
+```
+
+Control tool result truncation in logs:
+```bash
+MAX_TOOL_RESULT_CHARS=500 LOGURU_LEVEL=DEBUG rem ask "Search for..."
 ```
 
 ## Project Structure

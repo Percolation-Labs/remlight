@@ -29,7 +29,8 @@ async def run_streaming(
     model: str | None = None,
     session_id: str | None = None,
     user_id: str | None = None,
-    agent_schema: str | None = None,
+    agent_schema: dict | None = None,
+    agent_schema_name: str | None = None,
     request_id: str | None = None,
     persist_messages: bool = True,
     output_format: str = "sse",  # "sse" or "plain"
@@ -72,6 +73,7 @@ async def run_streaming(
             session_id=session_id,
             user_id=user_id,
             agent=agent,
+            agent_schema=agent_schema,
         )
 
     # Save user message BEFORE streaming
@@ -143,6 +145,7 @@ async def run_sync(
     context: AgentContext | None = None,
     session_id: str | None = None,
     user_id: str | None = None,
+    agent_schema: dict | None = None,
     persist_messages: bool = True,
 ) -> Any:
     """
@@ -157,6 +160,7 @@ async def run_sync(
         context: Optional AgentContext
         session_id: Session ID for persistence
         user_id: User ID for persistence
+        agent_schema: Agent schema dict for system prompt extraction
         persist_messages: Whether to persist messages
 
     Returns:
@@ -175,6 +179,7 @@ async def run_sync(
             session_id=session_id,
             user_id=user_id,
             agent=agent,
+            agent_schema=agent_schema,
         )
 
     # Save user message
@@ -215,8 +220,17 @@ async def _load_session_history(
     session_id: str,
     user_id: str | None,
     agent,
+    agent_schema: dict | None = None,
 ) -> list | None:
-    """Load and convert session history to pydantic-ai format."""
+    """
+    Load and convert session history to pydantic-ai format.
+
+    Multi-Agent System Prompt Handling:
+    - Sessions CAN be shared between agents in multi-agent orchestration
+    - System prompt is loaded from CURRENT agent's schema (not stored messages)
+    - This enables each agent to use its own prompt with shared history
+    - System prompt injection happens at reconstruction time, not storage time
+    """
     try:
         from remlight.services.session import (
             SessionMessageStore,
@@ -233,12 +247,14 @@ async def _load_session_history(
         if not raw_history:
             return None
 
-        # Get system prompt from agent
+        # Get system prompt from schema (preferred) or fall back to agent
+        from remlight.agentic.schema import get_system_prompt as extract_system_prompt
+
         system_prompt = None
-        if hasattr(agent, "_system_prompt"):
-            system_prompt = agent._system_prompt
-        elif hasattr(agent, "system_prompt"):
-            system_prompt = agent.system_prompt
+        if agent_schema:
+            system_prompt = extract_system_prompt(agent_schema)
+        elif hasattr(agent, "_system_prompts") and agent._system_prompts:
+            system_prompt = agent._system_prompts[0]
 
         message_history = session_to_pydantic_messages(
             raw_history,
@@ -260,20 +276,39 @@ async def _save_user_message(
     user_id: str | None,
     content: str,
 ) -> None:
-    """Save user message to database."""
+    """
+    Save user message to database.
+
+    Also injects a context message with current date and user key
+    if this is the first message in a session (for profile lookup).
+    """
     try:
         from remlight.services.session import SessionMessageStore
 
+        timestamp = datetime.now(timezone.utc)
+        messages_to_store = []
+
+        # Build user context hint (date + user key for profile lookup)
+        context_parts = [f"Date: {timestamp.strftime('%Y-%m-%d')}"]
+        if user_id:
+            context_parts.append(f"User: {user_id}")
+            context_parts.append("Hint: Use MCP resource user://profile for user context.")
+
+        # Add context as system message metadata (not a separate message)
         user_msg = {
             "role": "user",
             "content": content,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": timestamp.isoformat(),
+            "metadata": {
+                "context_hint": "\n".join(context_parts),
+            },
         }
+        messages_to_store.append(user_msg)
 
         store = SessionMessageStore(user_id=user_id or "anonymous")
         await store.store_session_messages(
             session_id=session_id,
-            messages=[user_msg],
+            messages=messages_to_store,
             user_id=user_id,
             compress=False,
         )
@@ -290,31 +325,44 @@ async def _save_assistant_response(
     accumulated_content: list[str],
     tool_calls: list[dict],
 ) -> None:
-    """Save assistant response and tool calls to database."""
+    """
+    Save assistant response and tool calls to database.
+
+    Stores:
+    - tool_call: The tool invocation (name + arguments) - NOT the result
+    - assistant: The agent's text response (includes note-taking/decisions)
+
+    Tool responses are NOT stored - the agent captures relevant insights
+    in its assistant response via a note-taking pattern.
+    """
     try:
         from remlight.services.session import SessionMessageStore
 
         timestamp = datetime.now(timezone.utc).isoformat()
         messages_to_store = []
 
-        # Store tool call messages
+        # Store tool_call messages (NOT tool_response)
+        # Only store the invocation (name + arguments), not the result
         for tool_call in tool_calls:
             if not tool_call:
                 continue
-            tool_message = {
-                "role": "tool",
-                "content": json.dumps(tool_call.get("result", {}), default=str),
+            tool_call_message = {
+                "role": "tool_call",  # Changed from "tool" to "tool_call"
+                "content": json.dumps({
+                    "tool_name": tool_call.get("tool_name"),
+                    "arguments": tool_call.get("arguments"),
+                }, default=str),
                 "timestamp": timestamp,
                 "tool_call_id": tool_call.get("tool_id"),
                 "tool_name": tool_call.get("tool_name"),
-                "tool_arguments": tool_call.get("arguments"),
+                # Note: NOT storing tool_call.get("result") - agent uses note-taking pattern
             }
-            messages_to_store.append(tool_message)
+            messages_to_store.append(tool_call_message)
 
-        # Store assistant text response
+        # Store assistant text response (includes agent's notes/decisions)
         full_content = "".join(accumulated_content) if accumulated_content else None
 
-        # Fallback to text_response from tool results
+        # Fallback to text_response from tool results (for backward compat)
         if not full_content:
             for tool_call in tool_calls:
                 if not tool_call:

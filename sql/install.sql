@@ -42,8 +42,8 @@ CREATE TABLE IF NOT EXISTS ontologies (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     deleted_at TIMESTAMP WITH TIME ZONE
 );
+CREATE UNIQUE INDEX IF NOT EXISTS ontologies_name_unique ON ontologies(name);
 CREATE INDEX IF NOT EXISTS ontologies_user_id_idx ON ontologies(user_id);
-CREATE INDEX IF NOT EXISTS ontologies_name_idx ON ontologies(name);
 CREATE INDEX IF NOT EXISTS ontologies_category_idx ON ontologies(category);
 CREATE INDEX IF NOT EXISTS ontologies_embedding_idx ON ontologies USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX IF NOT EXISTS ontologies_graph_edges_idx ON ontologies USING GIN (graph_edges);
@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS resources (
     deleted_at TIMESTAMP WITH TIME ZONE,
     CONSTRAINT resource_unique_uri_ordinal UNIQUE (user_id, uri, ordinal)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS resources_name_unique ON resources(name) WHERE name IS NOT NULL;
 CREATE INDEX IF NOT EXISTS resources_user_id_idx ON resources(user_id);
 CREATE INDEX IF NOT EXISTS resources_category_idx ON resources(category);
 CREATE INDEX IF NOT EXISTS resources_embedding_idx ON resources USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
@@ -374,26 +375,35 @@ CREATE TABLE IF NOT EXISTS embedding_queue (
 );
 CREATE INDEX IF NOT EXISTS embedding_queue_status_idx ON embedding_queue(status);
 
--- Trigger to queue embedding generation
-CREATE OR REPLACE FUNCTION queue_embedding()
+-- Trigger to queue embedding generation (separate functions per table to avoid field access errors)
+CREATE OR REPLACE FUNCTION queue_ontology_embedding()
 RETURNS TRIGGER AS $$
 BEGIN
-    -- Only queue if content exists and embedding is null
-    IF NEW.embedding IS NULL AND (
-        (TG_TABLE_NAME = 'ontologies' AND NEW.description IS NOT NULL) OR
-        (TG_TABLE_NAME = 'resources' AND NEW.content IS NOT NULL) OR
-        (TG_TABLE_NAME = 'messages' AND NEW.content IS NOT NULL)
-    ) THEN
+    IF NEW.embedding IS NULL AND NEW.description IS NOT NULL THEN
         INSERT INTO embedding_queue (table_name, record_id, content)
-        VALUES (
-            TG_TABLE_NAME,
-            NEW.id,
-            CASE TG_TABLE_NAME
-                WHEN 'ontologies' THEN COALESCE(NEW.name || ': ', '') || COALESCE(NEW.description, '')
-                WHEN 'resources' THEN COALESCE(NEW.name || ': ', '') || COALESCE(NEW.content, '')
-                WHEN 'messages' THEN NEW.content
-            END
-        );
+        VALUES ('ontologies', NEW.id, COALESCE(NEW.name || ': ', '') || NEW.description);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION queue_resource_embedding()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.embedding IS NULL AND NEW.content IS NOT NULL THEN
+        INSERT INTO embedding_queue (table_name, record_id, content)
+        VALUES ('resources', NEW.id, COALESCE(NEW.name || ': ', '') || NEW.content);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION queue_message_embedding()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.embedding IS NULL AND NEW.content IS NOT NULL THEN
+        INSERT INTO embedding_queue (table_name, record_id, content)
+        VALUES ('messages', NEW.id, NEW.content);
     END IF;
     RETURN NEW;
 END;
@@ -402,17 +412,17 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS ontologies_embedding_queue ON ontologies;
 CREATE TRIGGER ontologies_embedding_queue
 AFTER INSERT OR UPDATE OF description ON ontologies
-FOR EACH ROW EXECUTE FUNCTION queue_embedding();
+FOR EACH ROW EXECUTE FUNCTION queue_ontology_embedding();
 
 DROP TRIGGER IF EXISTS resources_embedding_queue ON resources;
 CREATE TRIGGER resources_embedding_queue
 AFTER INSERT OR UPDATE OF content ON resources
-FOR EACH ROW EXECUTE FUNCTION queue_embedding();
+FOR EACH ROW EXECUTE FUNCTION queue_resource_embedding();
 
 DROP TRIGGER IF EXISTS messages_embedding_queue ON messages;
 CREATE TRIGGER messages_embedding_queue
 AFTER INSERT OR UPDATE OF content ON messages
-FOR EACH ROW EXECUTE FUNCTION queue_embedding();
+FOR EACH ROW EXECUTE FUNCTION queue_message_embedding();
 
 -- ============================================
 -- DONE

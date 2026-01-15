@@ -7,10 +7,14 @@ ontologies, resources, sessions, messages, and kv_store.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from uuid import UUID
 
+from loguru import logger
+
 from remlight.services.database import DatabaseService
+from remlight.services.embeddings import generate_embedding_async
 
 
 class Repository:
@@ -151,6 +155,59 @@ class OntologyRepository(Repository):
     def __init__(self, db: DatabaseService):
         super().__init__(db, "ontologies")
 
+    async def upsert(
+        self,
+        name: str,
+        description: str,
+        category: str | None = None,
+        tags: list[str] | None = None,
+        properties: dict | None = None,
+        generate_embeddings: bool = True,
+    ) -> dict:
+        """
+        Upsert ontology entity with automatic embedding generation.
+
+        Args:
+            name: Entity key/name (used for LOOKUP)
+            description: Full content (markdown)
+            category: Optional category
+            tags: Optional tags list
+            properties: Optional properties dict
+            generate_embeddings: Whether to generate embeddings (default: True)
+
+        Returns:
+            Upserted record dict
+        """
+        # Generate embedding if requested
+        embedding = None
+        if generate_embeddings:
+            logger.debug(f"Generating embedding for {name}")
+            embedding_list = await generate_embedding_async(description)
+            # Convert to pgvector string format
+            embedding = "[" + ",".join(str(x) for x in embedding_list) + "]"
+
+        query = """
+            INSERT INTO ontologies (name, description, category, tags, properties, embedding)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (name) DO UPDATE SET
+                description = EXCLUDED.description,
+                category = EXCLUDED.category,
+                tags = EXCLUDED.tags,
+                properties = EXCLUDED.properties,
+                embedding = EXCLUDED.embedding,
+                updated_at = NOW()
+            RETURNING *
+        """
+        return await self.db.fetchrow(
+            query,
+            name,
+            description,
+            category,
+            tags or [],
+            json.dumps(properties or {}),
+            embedding,
+        )
+
     async def get_by_category(
         self, category: str, user_id: str | None = None, limit: int = 100
     ) -> list[dict]:
@@ -163,6 +220,63 @@ class ResourceRepository(Repository):
 
     def __init__(self, db: DatabaseService):
         super().__init__(db, "resources")
+
+    async def upsert(
+        self,
+        name: str,
+        content: str,
+        uri: str | None = None,
+        category: str | None = None,
+        tags: list[str] | None = None,
+        metadata: dict | None = None,
+        generate_embeddings: bool = True,
+    ) -> dict:
+        """
+        Upsert resource entity with automatic embedding generation.
+
+        Args:
+            name: Entity key/name
+            content: Full content
+            uri: Optional URI
+            category: Optional category
+            tags: Optional tags list
+            metadata: Optional metadata dict
+            generate_embeddings: Whether to generate embeddings (default: True)
+
+        Returns:
+            Upserted record dict
+        """
+        # Generate embedding if requested
+        embedding = None
+        if generate_embeddings:
+            logger.debug(f"Generating embedding for {name}")
+            embedding_list = await generate_embedding_async(content)
+            # Convert to pgvector string format
+            embedding = "[" + ",".join(str(x) for x in embedding_list) + "]"
+
+        query = """
+            INSERT INTO resources (name, content, uri, category, tags, metadata, embedding)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (name) DO UPDATE SET
+                content = EXCLUDED.content,
+                uri = EXCLUDED.uri,
+                category = EXCLUDED.category,
+                tags = EXCLUDED.tags,
+                metadata = EXCLUDED.metadata,
+                embedding = EXCLUDED.embedding,
+                updated_at = NOW()
+            RETURNING *
+        """
+        return await self.db.fetchrow(
+            query,
+            name,
+            content,
+            uri,
+            category,
+            tags or [],
+            json.dumps(metadata or {}),
+            embedding,
+        )
 
     async def get_by_uri(self, uri: str, user_id: str | None = None) -> list[dict]:
         """Get resources by URI (may have multiple ordinals)."""
@@ -270,7 +384,6 @@ class KVStoreRepository:
         tenant_id: str | None = None,
     ) -> dict:
         """Set or update an entity in the KV store."""
-        import json
         query = """
             INSERT INTO kv_store (entity_key, entity_type, table_name, data, user_id, tenant_id)
             VALUES ($1, $2, $2, $3::jsonb, $4, $5)

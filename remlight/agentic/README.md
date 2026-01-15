@@ -15,6 +15,77 @@ agentic/
 └── provider.py         # Agent factory - creates pydantic-ai agents
 ```
 
+## Implementation Requirements
+
+The following requirements MUST be implemented with corresponding unit tests.
+
+Unit tests: `tests/unit/test_agentic.py`
+
+### 1. YAML Protocol to Pydantic Mapping
+
+- [x] YAML agent schema files MUST be parsed and mapped to Pydantic models
+- [x] Schema validation MUST occur during loading
+
+### 2. Structured Output Handling
+
+- [x] When `structured_output: true`, Pydantic MUST **REMOVE the description field** from the JSON schema sent to the LLM
+- [x] When `structured_output: false`, the prompt including the full schema YAML MUST be merged into a single system prompt
+- [x] The description field contains the system prompt and should not pollute structured output schemas
+
+### 3. MCP Tool References
+
+- [x] Tool references MUST support three formats:
+  - **Local server**: Tool name from locally running MCP server ✅
+  - **Remote URI**: Full URI to remote MCP endpoint ⏳ **FUTURE WORK**
+  - **Alias**: Registered alias mapping to tool definition ⏳ **FUTURE WORK**
+- [ ] Factory MUST construct callable signatures for remote tools via FastMCP client ⏳ **FUTURE WORK**
+- [x] **Resources MUST be treated as tools**: A resource URI can be added as a tool reference with proper name normalization (e.g., `resource://users/profile` → `resource_users_profile`)
+
+> **FUTURE WORK**: Remote MCP tool support via FastMCP client is not yet implemented.
+> Currently only local (in-process) MCP servers are supported. Remote MCP endpoints
+> (`mcp://host/tool` URIs) and alias resolution will be added in a future release.
+
+### 4. Message Persistence
+
+- [x] **Store**: `user`, `assistant`, and `tool_call` messages in database
+- [x] **Do NOT store**: `tool_response` messages (agent uses note-taking pattern)
+- [x] Session ID MUST be used to rebuild message history for all agent calls in session
+- [x] API calls typically send only the last message; session history is reconstructed server-side
+- [x] Message constructor MUST inject a user context message containing:
+  - Current date/time
+  - User key (email) if known, to enable profile lookup
+- [x] Hint the agent to use MCP resource `user://profile` for user context
+
+### 5. Multi-Agent System Prompts
+
+- [x] Sessions CAN be shared between agents in multi-agent orchestration
+- [x] Each agent's system prompt MUST be loaded dynamically in the message builder
+- [x] Session message rebuilder MUST use the **current agent's** system prompt, not the original agent's
+- [x] System prompt injection happens at message reconstruction time, not storage time
+
+### 6. SSE Event Streaming
+
+- [x] **ALL** tool events MUST be streamed as SSE, including events from child agents
+- [x] Child agent tool calls/results bubble up through parent's event sink
+- [x] Event types: `tool_call`, `tool_result`, `action`, `child_content`, `child_tool_start`, `child_tool_result`
+
+### 7. API Headers
+
+The following headers MUST be supported for agent invocation:
+
+| Header | Purpose | Notes |
+|--------|---------|-------|
+| `X-User-Id` | User identifier override | Falls back to JWT token claim |
+| `X-Session-Id` | Session for message history | Required for stateful conversations |
+| `X-Client-Id` | Client application identifier | e.g., "web", "mobile", "cli" |
+| `X-Agent-Schema` | Agent schema URI to invoke | Allows dynamic agent selection |
+
+- [x] `X-Agent-Schema` allows selecting which agent handles the request
+- [x] A default agent MUST be configurable when header is absent
+- [x] JWT token takes precedence over `X-User-Id` header for security
+
+---
+
 ## Critical Design Patterns
 
 ### 1. AgentContext - Pydantic BaseModel (NOT dataclass)

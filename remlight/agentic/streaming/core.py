@@ -6,10 +6,14 @@ Provides two modes:
 """
 
 import asyncio
+import os
 import uuid
 from typing import Any, AsyncGenerator
 
 from loguru import logger
+
+# Max characters to show in debug logging for tool results
+MAX_TOOL_RESULT_CHARS = int(os.environ.get("MAX_TOOL_RESULT_CHARS", "200"))
 
 from remlight.agentic.streaming.events import (
     DoneEvent,
@@ -158,6 +162,7 @@ async def stream_plain(
     Simple streaming for CLI - yields plain text chunks.
 
     No SSE formatting, no event tracking. Just raw text content.
+    Tool calls and results are logged via loguru.
 
     Args:
         agent: Pydantic AI Agent instance
@@ -177,10 +182,39 @@ async def stream_plain(
                 if Agent.is_model_request_node(node):
                     async with node.stream(stream.ctx) as request_stream:
                         async for event in request_stream:
+                            event_type = type(event).__name__
+
+                            # Log tool call starts
+                            if event_type == "PartStartEvent" and hasattr(event, "part"):
+                                part_type = type(event.part).__name__
+                                if part_type == "ToolCallPart":
+                                    tool_name = event.part.tool_name
+                                    args = getattr(event.part, "args", None)
+                                    logger.debug(f"Tool call: {tool_name}({args})")
+
+                            # Stream text content
                             if hasattr(event, "delta") and hasattr(event.delta, "content_delta"):
                                 content = event.delta.content_delta
                                 if content:
                                     yield content
+
+                elif Agent.is_call_tools_node(node):
+                    # Log tool results
+                    async with node.stream(stream.ctx) as tools_stream:
+                        async for tool_event in tools_stream:
+                            event_type = type(tool_event).__name__
+                            if event_type == "FunctionToolResultEvent":
+                                result = (
+                                    tool_event.result.content
+                                    if hasattr(tool_event.result, "content")
+                                    else tool_event.result
+                                )
+                                # Truncate long results for logging
+                                result_str = str(result)[:MAX_TOOL_RESULT_CHARS]
+                                if len(str(result)) > MAX_TOOL_RESULT_CHARS:
+                                    result_str += "..."
+                                logger.debug(f"Tool result: {result_str}")
+
     except Exception as e:
         logger.error(f"CLI streaming error: {e}")
         yield f"\nError: {e}"

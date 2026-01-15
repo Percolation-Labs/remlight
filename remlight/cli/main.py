@@ -1,10 +1,12 @@
 """REMLight CLI - Command Line Interface."""
 
 import asyncio
+import re
 import sys
 from pathlib import Path
 
 import click
+import yaml
 
 from remlight import __version__
 
@@ -20,9 +22,10 @@ def cli():
 @click.argument("query")
 @click.option("--schema", "-s", help="Path to agent schema YAML file or agent name")
 @click.option("--user-id", "-u", default="cli-user", help="User ID for queries")
+@click.option("--session", help="Session UUID for multi-turn conversations")
 @click.option("--model", "-m", help="Model to use (e.g., openai:gpt-4o-mini)")
 @click.option("--stream/--no-stream", default=True, help="Stream output")
-def ask(query: str, schema: str | None, user_id: str, model: str | None, stream: bool):
+def ask(query: str, schema: str | None, user_id: str, session: str | None, model: str | None, stream: bool):
     """
     Ask an agent a question.
 
@@ -30,29 +33,44 @@ def ask(query: str, schema: str | None, user_id: str, model: str | None, stream:
         rem ask "What is machine learning?"
         rem ask "Find documents about AI" --schema query-agent
         rem ask "Search for projects" --model openai:gpt-4o
+
+    Multi-turn conversations (session must be a UUID):
+        rem ask "What is REM?" --session 550e8400-e29b-41d4-a716-446655440000
+        rem ask "Tell me more" --session 550e8400-e29b-41d4-a716-446655440000
     """
-    asyncio.run(_ask_async(query, schema, user_id, model, stream))
+    asyncio.run(_ask_async(query, schema, user_id, session, model, stream))
 
 
 async def _ask_async(
     query: str,
     schema_path: str | None,
     user_id: str,
+    session_id: str | None,
     model: str | None,
     stream: bool,
 ):
     """Async implementation of ask command."""
-    from remlight.services.database import get_db
-    from remlight.api.mcp_main import init_mcp, get_mcp_tools
-    from remlight.api.routers.tools import get_agent_schema, init_tools
+    import uuid as uuid_module
+
     from remlight.agentic import (
         AgentContext,
         create_agent,
-        schema_from_yaml_file,
         run_streaming,
         run_sync,
+        schema_from_yaml_file,
     )
+    from remlight.api.mcp_main import get_mcp_tools, init_mcp
+    from remlight.api.routers.tools import get_agent_schema, init_tools
+    from remlight.services.database import get_db
     from remlight.settings import settings
+
+    # Validate session_id is a UUID if provided
+    if session_id:
+        try:
+            uuid_module.UUID(session_id)
+        except ValueError:
+            click.echo(f"Error: Session must be a valid UUID, got: {session_id}", err=True)
+            return
 
     # Connect to database
     db = get_db()
@@ -66,11 +84,9 @@ async def _ask_async(
 
     # Load schema
     if schema_path:
-        # Check if it's a file path
         if Path(schema_path).exists():
             schema = schema_from_yaml_file(schema_path)
         else:
-            # Try as agent name
             schema = get_agent_schema(schema_path)
             if schema is None:
                 click.echo(f"Error: Agent '{schema_path}' not found", err=True)
@@ -78,13 +94,9 @@ async def _ask_async(
     else:
         schema = _default_cli_schema()
 
-    # Create context
-    context = AgentContext(user_id=user_id)
-
-    # Get tools from MCP server
+    # Create context and agent
+    context = AgentContext(user_id=user_id, session_id=session_id)
     tools = await get_mcp_tools()
-
-    # Create agent
     agent_runtime = await create_agent(
         schema=schema,
         model_name=model or settings.llm.default_model,
@@ -92,28 +104,30 @@ async def _ask_async(
         context=context,
     )
 
-    click.echo()  # Newline before response
+    click.echo()
 
     if stream:
-        # Stream response using unified runner (plain text for CLI)
         async for chunk in run_streaming(
             agent=agent_runtime.agent,
             prompt=query,
             context=context,
             model=model,
             user_id=user_id,
+            session_id=session_id,
+            agent_schema=schema,  # Pass schema for system prompt extraction
             persist_messages=settings.postgres.enabled,
             output_format="plain",
         ):
             click.echo(chunk, nl=False)
-        click.echo()  # Final newline
+        click.echo()
     else:
-        # Non-streaming response using unified runner
         result = await run_sync(
             agent=agent_runtime.agent,
             prompt=query,
             context=context,
             user_id=user_id,
+            session_id=session_id,
+            agent_schema=schema,  # Pass schema for system prompt extraction
             persist_messages=settings.postgres.enabled,
         )
         output = result.output if hasattr(result, "output") else result
@@ -170,14 +184,14 @@ def query(query: str, user_id: str | None, limit: int):
 async def _query_async(query_str: str, user_id: str | None, limit: int):
     """Async implementation of query command."""
     import json
+
+    from remlight.api.routers.tools import init_tools, search
     from remlight.services.database import get_db
-    from remlight.api.routers.tools import search, init_tools
 
     db = get_db()
     await db.connect()
     init_tools(db)
 
-    # Call search tool directly
     result = await search(query=query_str, limit=limit, user_id=user_id)
     click.echo(json.dumps(result, indent=2, default=str))
 
@@ -191,6 +205,7 @@ async def _query_async(query_str: str, user_id: str | None, limit: int):
 def serve(host: str, port: int, reload: bool):
     """Start the REM API server (includes MCP endpoint)."""
     import uvicorn
+
     click.echo(f"Starting REM server v{__version__} on http://{host}:{port}")
     click.echo(f"  API docs: http://{host}:{port}/docs")
     click.echo(f"  MCP endpoint: http://{host}:{port}/api/v1/mcp")
@@ -225,18 +240,14 @@ def ingest(path: str, table: str, pattern: str, dry_run: bool):
 
 async def _ingest_async(path: str, table: str, pattern: str, dry_run: bool):
     """Async implementation of ingest command."""
-    import re
-    import yaml
     from remlight.services.database import get_db
-    from remlight.services.repository import Repository
-    from remlight.models.entities import Ontology, Resource
+    from remlight.services.repository import OntologyRepository, ResourceRepository
 
     input_path = Path(path)
 
     # Collect files to process
     if input_path.is_dir():
         files = list(input_path.glob(pattern))
-        # Skip README.md and scripts/
         files = [
             f for f in files
             if f.name != "README.md" and "scripts" not in f.parts
@@ -264,16 +275,15 @@ async def _ingest_async(path: str, table: str, pattern: str, dry_run: bool):
     await db.connect()
 
     try:
-        # Select model based on table
-        if table == "ontology":
-            model_class = Ontology
+        # Create appropriate repository
+        if table in ("ontology", "ontologies"):
+            repo = OntologyRepository(db)
         elif table == "resources":
-            model_class = Resource
+            repo = ResourceRepository(db)
         else:
             click.echo(f"Unknown table: {table}", err=True)
             sys.exit(1)
 
-        repo = Repository(model_class, table_name=table)
         processed = 0
         failed = 0
 
@@ -283,21 +293,29 @@ async def _ingest_async(path: str, table: str, pattern: str, dry_run: bool):
                 entity_key = _extract_entity_key(file_path, content)
                 frontmatter = _parse_frontmatter(content)
 
-                # Build entity
-                entity_data = {
-                    "name": entity_key,
-                    "content": content,
-                    "uri": f"file://{file_path.absolute()}",
-                    "properties": frontmatter or {},
-                    "tags": frontmatter.get("tags", []) if frontmatter else [],
-                }
+                category = frontmatter.get("parent") if frontmatter else None
+                tags = frontmatter.get("tags", []) if frontmatter else []
+                properties = frontmatter or {}
 
-                if frontmatter:
-                    entity_data["description"] = frontmatter.get("title", entity_key)
-                    entity_data["category"] = frontmatter.get("parent")
+                # Use repository upsert (handles embeddings automatically)
+                if isinstance(repo, OntologyRepository):
+                    await repo.upsert(
+                        name=entity_key,
+                        description=content,
+                        category=category,
+                        tags=tags,
+                        properties=properties,
+                    )
+                else:
+                    await repo.upsert(
+                        name=entity_key,
+                        content=content,
+                        uri=f"file://{file_path.absolute()}",
+                        category=category,
+                        tags=tags,
+                        metadata=properties,
+                    )
 
-                entity = model_class(**entity_data)
-                await repo.upsert(entity, embeddable_fields=["content"], generate_embeddings=True)
                 processed += 1
                 click.echo(f"  ✓ {entity_key}")
 
@@ -322,12 +340,6 @@ def _extract_entity_key(file_path: Path, content: str | None = None) -> str:
 
 def _parse_frontmatter(content: str) -> dict | None:
     """Parse YAML frontmatter from markdown content."""
-    import re
-    try:
-        import yaml
-    except ImportError:
-        return None
-
     match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
     if not match:
         return None

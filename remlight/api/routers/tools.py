@@ -402,7 +402,8 @@ async def ask_agent(
             )
 
             if raw_session_history:
-                system_prompt = schema.get("description", "")
+                from remlight.agentic.schema import get_system_prompt
+                system_prompt = get_system_prompt(schema)
                 pydantic_message_history = session_to_pydantic_messages(
                     raw_session_history,
                     system_prompt=system_prompt,
