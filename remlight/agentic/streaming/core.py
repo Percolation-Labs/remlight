@@ -4,7 +4,35 @@ Core Streaming Generator for Agent Responses
 
 This module implements REAL-TIME STREAMING of agent responses. It's what makes
 the agent feel responsive - users see text appearing as it's generated, not
-waiting for the entire response to complete.
+waiting for the entire response to complete. This is mostly an adapter between
+the framework (PydanticAI) and the SSE events we want to send.
+
+PYDANTIC-AI EVENT TYPES
+-----------------------
+
+We handle these pydantic-ai streaming events:
+
+| Event Type      | Part Type      | When Emitted                | What We Do                          |
+|-----------------|----------------|-----------------------------|------------------------------------|
+| PartStartEvent  | TextPart       | LLM starts text output      | Emit content chunk                 |
+| PartStartEvent  | ToolCallPart   | LLM wants to call a tool    | Emit tool_call(started), no args   |
+| PartDeltaEvent  | TextPartDelta  | Text content streaming      | Emit content chunk                 |
+| PartEndEvent    | ToolCallPart   | Tool call args complete     | Emit tool_call(executing) + args   |
+| FunctionToolResultEvent | -      | Tool execution completed    | Emit tool_call(completed) + result |
+
+WHY PartEndEvent MATTERS FOR TOOL ARGS
+--------------------------------------
+Tool call arguments in pydantic-ai are streamed incrementally. At PartStartEvent,
+args may be None or incomplete. The full arguments are only available at PartEndEvent.
+
+Tool call lifecycle:
+1. PartStartEvent(ToolCallPart) → args=None/partial → emit tool_call(started)
+2. PartEndEvent(ToolCallPart)   → args=complete    → emit tool_call(executing)
+3. FunctionToolResultEvent      → result available → emit tool_call(completed)
+
+REFERENCE IMPLEMENTATION
+------------------------
+This follows the pattern from remstack/rem/src/rem/api/routers/chat/streaming.py
 
 STREAMING ARCHITECTURE
 ----------------------
@@ -138,6 +166,7 @@ async def stream_sse(
     request_id: str | None = None,
     message_id: str | None = None,
     session_id: str | None = None,
+    user_id: str | None = None,
     agent_schema: str | None = None,
     context=None,
     message_history: list | None = None,
@@ -249,7 +278,7 @@ async def stream_sse(
                 # ModelRequestNode: LLM is generating (text or tool calls)
                 if Agent.is_model_request_node(node):
                     async for chunk in _handle_model_request_node(
-                        node, agent_run, state
+                        node, agent_run, state, session_id, user_id, model, agent_schema
                     ):
                         yield chunk
 
@@ -265,6 +294,7 @@ async def stream_sse(
                         agent_schema,
                         model,
                         tool_calls_out,
+                        user_id,
                     ):
                         yield chunk
 
@@ -398,6 +428,10 @@ async def _handle_model_request_node(
     node,
     agent_run,
     state: StreamingState,
+    session_id: str | None = None,
+    user_id: str | None = None,
+    model: str | None = None,
+    agent_schema: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Handle ModelRequestNode - LLM is generating response.
@@ -416,18 +450,21 @@ async def _handle_model_request_node(
     skip parent text when child_content_streamed is True to prevent
     duplicate output.
 
-    TOOL CALL TRACKING
-    -----------------
+    TOOL CALL TRACKING AND PERSISTENCE
+    ----------------------------------
     When ToolCallPart is detected:
     1. Generate unique tool_id
     2. Register in state (for matching with result later)
-    3. Emit ToolCallEvent with status="started"
-    4. Update progress
+    3. Save to DB immediately (so child tool calls come AFTER parent)
+    4. Emit ToolCallEvent with status="started"
+    5. Update progress
 
     Args:
         node: ModelRequestNode from agent.iter()
         agent_run: The agent run context
         state: StreamingState for tracking
+        session_id: Session ID for persistence
+        user_id: User ID for persistence
 
     Yields:
         SSE-formatted strings for content and tool calls
@@ -467,13 +504,14 @@ async def _handle_model_request_node(
                             continue
 
                         # Generate unique ID and extract arguments
+                        # Pass the part directly - extract_tool_args handles ArgsDict
                         tool_id = f"call_{uuid.uuid4().hex[:8]}"
-                        args_dict = extract_tool_args(
-                            getattr(event.part, "args", None)
-                        )
+                        args_dict = extract_tool_args(event.part)
 
                         # Register for later matching with result
                         state.register_tool_call(tool_name, tool_id, event.index, args_dict)
+
+                        # NOTE: DB save moved to PartEndEvent where args are complete
 
                         # Emit tool call start event (UI can show "Calling search...")
                         yield format_sse_event(
@@ -493,6 +531,67 @@ async def _handle_model_request_node(
                             label=f"Calling {tool_name}",
                         ))
 
+            # PartEndEvent: Tool call arguments are now complete
+            # Args may be streamed incrementally and only fully available at PartEndEvent
+            elif event_type == "PartEndEvent":
+                if hasattr(event, "part"):
+                    part_type = type(event.part).__name__
+                    if part_type == "ToolCallPart":
+                        tool_name = event.part.tool_name
+                        if tool_name == "final_result":
+                            continue
+
+                        # Re-extract args now that streaming is complete
+                        args_dict = extract_tool_args(event.part)
+
+                        # Update the registered tool call with complete args
+                        if hasattr(event, "index") and event.index in state.active_tool_indices:
+                            tool_id = state.active_tool_indices[event.index]
+                            state.update_tool_args(tool_id, args_dict)
+
+                            # Save parent tool call to DB with complete args
+                            # This ensures parent tool calls appear BEFORE child tool calls
+                            if session_id:
+                                try:
+                                    from datetime import datetime, timezone
+                                    import json
+                                    from remlight.services.session import SessionMessageStore
+
+                                    store = SessionMessageStore(user_id=user_id or "anonymous")
+                                    tool_msg = {
+                                        "role": "tool",
+                                        "content": json.dumps(args_dict) if args_dict else "{}",
+                                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                                        "tool_call_id": tool_id,
+                                        "tool_name": tool_name,
+                                        "agent_schema": agent_schema,
+                                        "model": model,
+                                    }
+                                    await store.store_session_messages(
+                                        session_id=session_id,
+                                        messages=[tool_msg],
+                                        user_id=user_id,
+                                        compress=False,
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"Failed to save parent tool call: {e}")
+
+                            # Emit updated tool_call event with complete args
+                            # This lets the frontend update the tool call display
+                            yield format_sse_event(
+                                ToolCallEvent(
+                                    tool_name=tool_name,
+                                    tool_id=tool_id,
+                                    status="executing",
+                                    arguments=args_dict,
+                                )
+                            )
+
+                            # Remove from active indices
+                            del state.active_tool_indices[event.index]
+                            if event.index in state.active_tool_calls:
+                                del state.active_tool_calls[event.index]
+
 
 async def _handle_call_tools_node(
     node,
@@ -504,6 +603,7 @@ async def _handle_call_tools_node(
     agent_schema: str | None,
     model: str | None,
     tool_calls_out: list | None,
+    user_id: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Handle CallToolsNode - Tools are being executed.
@@ -541,10 +641,11 @@ async def _handle_call_tools_node(
         state: StreamingState for tracking
         child_event_sink: Queue for child agent events
         message_id: Message ID for metadata
-        session_id: Session ID for metadata
+        session_id: Session ID for metadata/persistence
         agent_schema: Agent schema name for metadata
         model: Model name for metadata
         tool_calls_out: Mutable list to capture tool calls
+        user_id: User ID for session persistence
 
     Yields:
         SSE-formatted strings for tool completions and child events
@@ -557,7 +658,10 @@ async def _handle_call_tools_node(
         ):
             # Child event from ask_agent
             if event_source == "child":
-                async for chunk in process_child_event(event_data, state):
+                async for chunk in process_child_event(
+                    event_data, state, session_id=session_id, user_id=user_id,
+                    model=model, agent_schema=agent_schema
+                ):
                     yield chunk
                 continue
 
@@ -606,6 +710,23 @@ async def _handle_call_tools_node(
                         payload=payload,
                     ))
 
+                    # Handle session_name updates from observation payloads
+                    if action_type == "observation" and payload.get("session_name"):
+                        session_name = payload["session_name"]
+                        # Update session in state for metadata event
+                        state.metadata["session_name"] = session_name
+                        # Update session name in database (async, best-effort)
+                        if session_id:
+                            try:
+                                from remlight.services.session import SessionMessageStore
+                                store = SessionMessageStore(user_id=user_id or "anonymous")
+                                await store.update_session_name(
+                                    session_id=session_id,
+                                    name=session_name,
+                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to update session name: {e}")
+
                 # Capture tool call data for persistence
                 if tool_calls_out is not None:
                     tool_calls_out.append(tool_data)
@@ -617,6 +738,7 @@ async def _handle_call_tools_node(
                             tool_name=tool_data.get("tool_name", "tool"),
                             tool_id=tool_data.get("tool_id", "unknown"),
                             status="completed",
+                            arguments=tool_data.get("arguments"),
                             result=str(result_content)[:200] if result_content else None,
                         )
                     )
@@ -728,6 +850,7 @@ async def stream_sse_with_save(
         request_id=request_id,
         message_id=message_id,
         session_id=session_id,
+        user_id=user_id,
         agent_schema=agent_schema,
         context=context,
         message_history=message_history,
@@ -763,19 +886,11 @@ async def stream_sse_with_save(
         timestamp = datetime.now(timezone.utc).isoformat()
         messages_to_store = []
 
-        # Store tool call messages (role: "tool")
-        for tool_call in tool_calls:
-            if not tool_call:
-                continue
-            tool_message = {
-                "role": "tool",
-                "content": json.dumps(tool_call.get("result", {}), default=str),
-                "timestamp": timestamp,
-                "tool_call_id": tool_call.get("tool_id"),
-                "tool_name": tool_call.get("tool_name"),
-                "tool_arguments": tool_call.get("arguments"),
-            }
-            messages_to_store.append(tool_message)
+        # NOTE: Parent tool calls are now saved during streaming at PartStartEvent
+        # to ensure correct chronological ordering (parent before child).
+        # We skip saving them again here to avoid duplicates.
+        # Child tool calls are saved during streaming via process_child_event.
+        # Only action tool calls with special payloads are saved here.
 
         # Store assistant text response (role: "assistant")
         full_content = None
@@ -813,8 +928,9 @@ async def stream_sse_with_save(
                     user_id=user_id,
                     compress=False,  # Store uncompressed (compress on load)
                 )
-            except Exception:
-                pass  # Persistence failures shouldn't break streaming
+                logger.debug(f"Stored {len(messages_to_store)} post-stream messages")
+            except Exception as e:
+                logger.error(f"Post-stream persistence failed: {e}")
 
 
 async def save_user_message(

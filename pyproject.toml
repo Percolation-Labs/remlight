@@ -52,6 +52,7 @@ addopts = [
     "--strict-markers",
     "--tb=short",
     "--asyncio-mode=auto",
+    "-m", "not llm",
 ]
 markers = [
     "asyncio: marks tests as async",

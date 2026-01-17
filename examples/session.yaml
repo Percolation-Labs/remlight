@@ -1,0 +1,54 @@
+messages:
+- id: 926be78f-2c51-46d2-a764-f8bdb223076d
+  role: user
+  content: What is RemLight and what are its main features?
+  status: completed
+  tool_calls: []
+  metadata:
+    timestamp: '2026-01-17T21:05:35.327535+00:00'
+    message_index: 0
+  created_at: '2026-01-17T21:05:35.388611Z'
+  session_id: f2c5db60-fc72-429a-9768-bf7d83733126
+- id: 8b8787ed-3f7c-431e-ab67-0050b74b0888
+  role: tool
+  content: '{"query": "LOOKUP remlight"}'
+  status: completed
+  tool_calls: []
+  metadata:
+    model: claude-sonnet-4-20250514
+    timestamp: '2026-01-17T21:05:39.838981+00:00'
+    tool_name: query-agent:search
+    agent_schema: query-agent
+    tool_call_id: call_1161e795
+    message_index: 0
+  created_at: '2026-01-17T21:05:39.874735Z'
+  session_id: f2c5db60-fc72-429a-9768-bf7d83733126
+- id: aa9baee3-274b-4091-8baf-d8d435440e4b
+  role: tool
+  content: '{"type": "observation", "payload": {"confidence": 0.95, "sources": ["remlight"],
+    "session_name": "RemLight overview", "references": [], "flags": [], "risk_level":
+    "low", "risk_score": 2}}'
+  status: completed
+  tool_calls: []
+  metadata:
+    model: claude-sonnet-4-20250514
+    timestamp: '2026-01-17T21:05:40.909791+00:00'
+    tool_name: query-agent:action
+    agent_schema: query-agent
+    tool_call_id: call_cee71ddf
+    message_index: 0
+  created_at: '2026-01-17T21:05:40.918561Z'
+  session_id: f2c5db60-fc72-429a-9768-bf7d83733126
+- id: d4a53bb8-2fe1-4e0c-b0e0-7bd30d240f36
+  role: assistant
+  content: "I'll help you learn about RemLight by delegating this query to our specialized\
+    \ search agent.RemLight is a lightweight agentic framework designed for building\
+    \ multi-agent systems. Its main features include support for streaming, server-sent\
+    \ events (SSE), and session persistence. \n\nSource: RemLight entity."
+  status: completed
+  tool_calls: []
+  metadata:
+    timestamp: '2026-01-17T21:05:49.409737+00:00'
+    message_index: 0
+  created_at: '2026-01-17T21:05:49.427352Z'
+  session_id: f2c5db60-fc72-429a-9768-bf7d83733126

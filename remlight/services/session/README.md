@@ -192,6 +192,26 @@ def audit_session_history(
 }
 ```
 
+## ID Requirements
+
+**IMPORTANT: Both Session IDs and User IDs MUST be valid UUIDs.**
+
+The database schema uses UUID types for session, message, and user identifiers. Passing non-UUID strings will result in database errors.
+
+```python
+import uuid
+
+# Generate new IDs
+session_id = str(uuid.uuid4())  # e.g., "550e8400-e29b-41d4-a716-446655440000"
+user_id = str(uuid.uuid4())     # e.g., "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+```
+
+```typescript
+// JavaScript/TypeScript
+const sessionId = crypto.randomUUID()  // e.g., "550e8400-e29b-41d4-a716-446655440000"
+const userId = crypto.randomUUID()     // e.g., "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+```
+
 ## Database Schema
 
 Messages table:
@@ -199,7 +219,7 @@ Messages table:
 ```sql
 CREATE TABLE messages (
     id UUID PRIMARY KEY,
-    session_id UUID REFERENCES sessions(id),
+    session_id UUID REFERENCES sessions(id),  -- MUST be a valid UUID
     role VARCHAR(50),  -- 'user', 'assistant', 'tool'
     content TEXT,
     user_id VARCHAR(255),

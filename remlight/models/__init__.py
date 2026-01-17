@@ -1,7 +1,7 @@
 """REMLight models."""
 
 from remlight.models.core import CoreModel
-from remlight.models.entities import Ontology, Resource, User, Session, Message
+from remlight.models.entities import Ontology, Resource, User, Session, Message, Scenario
 from remlight.models.rem_query import (
     QueryType,
     LookupParameters,
@@ -20,6 +20,7 @@ __all__ = [
     "User",
     "Session",
     "Message",
+    "Scenario",
     "QueryType",
     "LookupParameters",
     "FuzzyParameters",

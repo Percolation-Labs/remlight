@@ -150,8 +150,8 @@ async with httpx.AsyncClient() as client:
     response = await client.post(
         "http://localhost:8000/api/v1/chat/completions",
         headers={
-            "X-User-Id": "user-123",
-            "X-Session-Id": "session-456",
+            "X-User-Id": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",  # Must be a valid UUID
+            "X-Session-Id": "550e8400-e29b-41d4-a716-446655440000",  # Must be a valid UUID
         },
         json={
             "messages": [{"role": "user", "content": "Hello"}],
@@ -183,8 +183,8 @@ REMLight uses standard HTTP headers for context propagation. These headers are a
 
 | Header | Type | Default | Description |
 |--------|------|---------|-------------|
-| `X-User-Id` | string | `null` | User identifier for scoping, personalization, and access control. Prefer JWT-based auth when available. |
-| `X-Session-Id` | string | `null` | Session/conversation identifier for multi-turn context. Messages are stored and retrieved by session. |
+| `X-User-Id` | UUID | `null` | **MUST be a valid UUID.** User identifier for scoping, personalization, and access control. Generate with `uuid.uuid4()` (Python) or `crypto.randomUUID()` (JS). Prefer JWT-based auth when available. |
+| `X-Session-Id` | UUID | `null` | **MUST be a valid UUID.** Session/conversation identifier for multi-turn context. Messages are stored and retrieved by session. Generate with `uuid.uuid4()` (Python) or `crypto.randomUUID()` (JS). |
 | `X-Tenant-Id` | string | `"default"` | Tenant identifier for multi-tenancy isolation. Used for REM data partitioning. |
 | `X-Agent-Schema` | string | `null` | Agent schema name or file path. Determines which agent handles the request. |
 | `X-Model-Name` | string | config default | LLM model override (e.g., `openai:gpt-4.1`, `anthropic:claude-sonnet-4-5-20250929`). |
@@ -211,8 +211,8 @@ Headers are automatically propagated through the request lifecycle:
 ```bash
 curl -X POST http://localhost:8000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "X-User-Id: user-123" \
-  -H "X-Session-Id: session-456" \
+  -H "X-User-Id: a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" \
+  -H "X-Session-Id: 550e8400-e29b-41d4-a716-446655440000" \
   -H "X-Tenant-Id: acme-corp" \
   -H "X-Agent-Schema: query-agent" \
   -H "X-Client-Id: web" \

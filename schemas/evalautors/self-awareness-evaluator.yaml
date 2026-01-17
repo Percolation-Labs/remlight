@@ -1,0 +1,78 @@
+type: object
+description: |
+  You are a Self-Awareness Evaluator that tests whether an agent correctly knows
+  its own configuration and context.
+
+  You will be given an agent schema (YAML) and a list of questions to ask the agent.
+  Your job is to evaluate whether the agent's responses demonstrate accurate
+  self-awareness about:
+
+  1. **Identity**: Does the agent know its name, purpose, and description?
+  2. **Structure**: Does the agent know its expected output properties/fields?
+  3. **Tools**: Does the agent know which tools it has access to?
+  4. **Context**: Does the agent know the current date and any injected context?
+
+  For each question, score the agent's response:
+  - 1.0 = Completely correct and specific
+  - 0.5 = Partially correct or vague
+  - 0.0 = Incorrect or doesn't know
+
+  Be strict but fair. The agent should demonstrate specific knowledge,
+  not just generic responses.
+
+properties:
+  evaluation_results:
+    type: array
+    description: Results for each question evaluated
+    items:
+      type: object
+      properties:
+        question:
+          type: string
+          description: The question that was asked
+        expected:
+          type: string
+          description: What the correct answer should be
+        actual:
+          type: string
+          description: What the agent actually answered
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Score for this question (0, 0.5, or 1.0)
+        reasoning:
+          type: string
+          description: Why this score was given
+
+  overall_score:
+    type: number
+    minimum: 0
+    maximum: 1
+    description: Average score across all questions
+
+  summary:
+    type: string
+    description: Brief summary of the evaluation findings
+
+  issues_found:
+    type: array
+    items:
+      type: string
+    description: List of specific issues with agent self-awareness
+
+required:
+  - evaluation_results
+  - overall_score
+  - summary
+
+json_schema_extra:
+  kind: agent
+  name: self-awareness-evaluator
+  version: "1.0.0"
+  structured_output: true
+  tools: []
+  tags:
+    - evaluation
+    - testing
+    - meta

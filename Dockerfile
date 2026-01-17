@@ -3,6 +3,20 @@
 # Minimal declarative agent framework with PostgreSQL memory
 # Built with uv for fast, deterministic builds
 # ==============================================================================
+#
+# NOTE: This Dockerfile is primarily for DEPLOYMENT and CI/CD.
+# For LOCAL DEVELOPMENT, it's recommended to run the API directly:
+#
+#   # Start Postgres with Docker
+#   docker-compose up postgres -d
+#
+#   # Run API locally with hot reload
+#   uv venv && source .venv/bin/activate && uv sync
+#   uvicorn remlight.api.main:app --host 0.0.0.0 --port 8080 --reload
+#
+# This gives you instant hot reload and better debugging capabilities.
+# See app/README.md for full development setup instructions.
+# ==============================================================================
 
 # ------------------------------------------------------------------------------
 # Stage 1: Builder - Install dependencies with uv

@@ -374,25 +374,55 @@ class SessionMessageStore:
 
         try:
             # Check if session already exists
-            existing = await self._session_repo.get(session_id)
+            existing = await self._session_repo.get_by_id(session_id)
             if existing:
                 return  # Session already exists, nothing to do
 
             # Create new session with client-provided UUID as ID
-            session_data = {
-                "id": session_id,
-                "name": session_id,  # Default name to UUID (can be updated later)
-                "user_id": user_id or self.user_id,
-                "tenant_id": self.user_id,
-                "status": "active",
-            }
-            await self._session_repo.create(session_data)
+            session = Session(
+                id=session_id,
+                name=session_id,  # Default name to UUID (can be updated later)
+                user_id=user_id or self.user_id,
+                tenant_id=self.user_id,
+                status="active",
+            )
+            await self._session_repo.upsert(session, generate_embeddings=False)
             logger.info(f"Created session {session_id} for user {user_id or self.user_id}")
 
         except Exception as e:
             # Best-effort: log but don't fail
             # Message storage may still work if session exists from elsewhere
             logger.warning(f"Failed to ensure session exists: {e}")
+
+    async def update_session_name(
+        self,
+        session_id: str,
+        name: str,
+    ) -> None:
+        """
+        Update the session name in the database.
+
+        Called when an agent provides a session_name via action(type="observation").
+
+        Args:
+            session_id: Session ID to update
+            name: New name for the session
+        """
+        if not settings.postgres.enabled:
+            logger.debug("Postgres disabled, skipping session name update")
+            return
+
+        try:
+            # Get existing session
+            session = await self._session_repo.get_by_id(session_id)
+            if session:
+                session.name = name
+                await self._session_repo.upsert(session, generate_embeddings=False)
+                logger.info(f"Updated session {session_id} name to: {name}")
+            else:
+                logger.warning(f"Session {session_id} not found for name update")
+        except Exception as e:
+            logger.warning(f"Failed to update session name: {e}")
 
     async def store_message(
         self,
@@ -422,26 +452,23 @@ class SessionMessageStore:
         # Use pre-generated id from message dict if available
         msg_id = message.get("id") or str(uuid4())
 
-        msg_data = {
-            "id": msg_id,
-            "content": message.get("content") or "",
-            "role": message.get("role", "assistant"),  # DB column is 'role', not 'message_type'
-            "session_id": session_id,
-            "tenant_id": self.user_id,
-            "user_id": user_id or self.user_id,
-            "metadata": json.dumps({
+        msg = Message(
+            id=msg_id,
+            content=message.get("content") or "",
+            role=message.get("role", "assistant"),  # DB column is 'role', not 'message_type'
+            session_id=session_id,
+            tenant_id=self.user_id,
+            user_id=user_id or self.user_id,
+            metadata={
                 "message_index": message_index,
                 "entity_key": entity_key,
                 "timestamp": message.get("timestamp"),
-            }),
-        }
+            },
+            trace_id=message.get("trace_id"),
+            span_id=message.get("span_id"),
+        )
 
-        if message.get("trace_id"):
-            msg_data["trace_id"] = message["trace_id"]
-        if message.get("span_id"):
-            msg_data["span_id"] = message["span_id"]
-
-        await self._message_repo.create(msg_data)
+        await self._message_repo.upsert(msg, generate_embeddings=False)
         logger.debug(f"Stored assistant response: {entity_key} (id={msg_id})")
         return entity_key
 
@@ -529,27 +556,39 @@ class SessionMessageStore:
                     msg_metadata["tool_name"] = message["tool_name"]
                 if message.get("tool_arguments"):
                     msg_metadata["tool_arguments"] = message["tool_arguments"]
+                # Include agent and model metadata for all tool messages
+                if message.get("agent_schema"):
+                    msg_metadata["agent_schema"] = message["agent_schema"]
+                if message.get("model"):
+                    msg_metadata["model"] = message["model"]
 
             # Use pre-generated id if provided
             msg_id = message.get("id") or str(uuid4())
 
-            msg_data = {
-                "id": msg_id,
-                "content": content,
-                "role": role,  # DB column is 'role', not 'message_type'
-                "session_id": session_id,
-                "tenant_id": self.user_id,
-                "user_id": user_id or self.user_id,
-                "metadata": json.dumps(msg_metadata),
-            }
+            # Extract tool_calls for assistant messages (stored in JSONB column)
+            # Must be dict or None, not a list (Message model constraint)
+            tool_calls_data = message.get("tool_calls")
+            if isinstance(tool_calls_data, list):
+                # Convert list to dict or None
+                tool_calls_data = None if not tool_calls_data else {"items": tool_calls_data}
+            elif not tool_calls_data:
+                tool_calls_data = None
 
-            if message.get("trace_id"):
-                msg_data["trace_id"] = message["trace_id"]
-            if message.get("span_id"):
-                msg_data["span_id"] = message["span_id"]
+            msg = Message(
+                id=msg_id,
+                content=content,
+                role=role,  # DB column is 'role', not 'message_type'
+                session_id=session_id,
+                tenant_id=self.user_id,
+                user_id=user_id or self.user_id,
+                metadata=msg_metadata,
+                tool_calls=tool_calls_data,  # Store tool calls in JSONB column
+                trace_id=message.get("trace_id"),
+                span_id=message.get("span_id"),
+            )
 
             try:
-                await self._message_repo.create(msg_data)
+                await self._message_repo.upsert(msg, generate_embeddings=False)
             except Exception as e:
                 logger.warning(f"Failed to store message {idx}: {e}")
 
@@ -625,19 +664,19 @@ class SessionMessageStore:
 
         try:
             # Load messages via Repository (ordered by created_at ASC)
-            rows = await self._message_repo.get_by_session(session_id)
+            messages = await self._message_repo.get_by_session(session_id)
 
             # Filter by tenant_id for data isolation
             # This ensures users only see their own messages
-            rows = [r for r in rows if r.get("tenant_id") == self.user_id]
+            messages = [m for m in messages if m.tenant_id == self.user_id]
 
             message_dicts = []
-            for idx, row in enumerate(rows):
-                role = row.get("role") or "assistant"
-                content = row.get("content") or ""
+            for idx, msg in enumerate(messages):
+                role = msg.role or "assistant"
+                content = msg.content or ""
 
-                # Parse metadata from JSONB column
-                metadata = row.get("metadata")
+                # Parse metadata from model (already a dict from Pydantic)
+                metadata = msg.metadata
                 if isinstance(metadata, str):
                     try:
                         metadata = json.loads(metadata)
@@ -649,7 +688,7 @@ class SessionMessageStore:
                 msg_dict: dict[str, Any] = {
                     "role": role,
                     "content": content,
-                    "timestamp": row["created_at"].isoformat() if row.get("created_at") else None,
+                    "timestamp": msg.created_at.isoformat() if msg.created_at else None,
                 }
 
                 # For tool messages, reconstruct tool call metadata

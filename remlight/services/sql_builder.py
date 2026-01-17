@@ -102,7 +102,14 @@ def model_to_dict(model: BaseModel, exclude_none: bool = True) -> dict[str, Any]
             data["id"] = uuid.uuid4()
 
     # Serialize JSONB fields for asyncpg
+    # PostgreSQL TEXT[] array fields should remain as Python lists
+    # JSONB fields (dicts, list[dict]) should be JSON-serialized
+    pg_array_fields = {"tags", "interests", "preferred_topics"}  # TEXT[] columns
+
     for key, value in data.items():
+        if key in pg_array_fields:
+            # Keep as Python list for PostgreSQL TEXT[] columns
+            continue
         if isinstance(value, (dict, list)) and key not in ("id",):
             data[key] = json.dumps(value)
 
@@ -165,17 +172,13 @@ def build_upsert(
     update_fields = [f for f in fields if f != conflict_field]
     update_clauses = [f"{field} = EXCLUDED.{field}" for field in update_fields]
 
-    sql = f"""
-        INSERT INTO {table_name} ({', '.join(fields)})
-        VALUES ({', '.join(placeholders)})
-        ON CONFLICT ({conflict_field}) DO UPDATE
-        SET {', '.join(update_clauses)}
-    """
+    # Single-line format for easier SQL surgery in repository (embedding injection)
+    sql = f"INSERT INTO {table_name} ({', '.join(fields)}) VALUES ({', '.join(placeholders)}) ON CONFLICT ({conflict_field}) DO UPDATE SET {', '.join(update_clauses)}"
 
     if return_id:
         sql += " RETURNING id"
 
-    return sql.strip(), values
+    return sql, values
 
 
 def build_select(

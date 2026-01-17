@@ -202,6 +202,41 @@ json_schema_extra:
     - name: ask_agent
 ```
 
+## Chat Client App
+
+REMLight includes a React-based chat client for testing agents interactively.
+
+### Running the Chat Client
+
+```bash
+# Start the API server
+rem serve --port 8000
+
+# In another terminal, start the React app
+cd app
+npm install
+npm run dev
+```
+
+The chat client will be available at http://localhost:5173 (or next available port).
+
+### Features
+
+- **Agent Selection**: Choose from available agent schemas
+- **Model Selection**: Switch between LLM models (GPT-4.1, Claude Sonnet 4.5, etc.)
+- **Streaming**: Real-time SSE streaming with tool call visualization
+- **Session History**: Browse and resume past conversations
+- **Export Sessions**: Download session data as YAML
+- **Add to Scenario**: Save conversations for evaluation testing
+
+### Running Tests
+
+```bash
+cd app
+npm run test               # Run Playwright tests
+npm run test:ui            # Run tests with UI
+```
+
 ## API Endpoints
 
 | Endpoint | Method | Description |
@@ -210,6 +245,12 @@ json_schema_extra:
 | `/api/v1/chat/completions` | POST | OpenAI-compatible chat |
 | `/api/v1/query` | POST | Execute REM query |
 | `/api/v1/mcp` | POST | MCP protocol |
+| `/api/v1/agents` | GET | List available agent schemas |
+| `/api/v1/agents/{name}` | GET | Get specific agent info |
+| `/api/v1/models` | GET | List available LLM models |
+| `/api/v1/sessions` | GET | List chat sessions |
+| `/api/v1/sessions/{id}/messages` | GET | Get session messages |
+| `/api/v1/sessions/{id}/export` | GET | Export session as YAML |
 
 ## MCP Tools
 
@@ -356,6 +397,17 @@ remlight/
 │   ├── query-agent.yaml     # Search agent
 │   ├── action-agent.yaml    # Observation agent
 │   └── orchestrator-agent.yaml
+├── app/                     # React chat client
+│   ├── src/
+│   │   ├── api/             # API clients (agents, models, sessions, chat)
+│   │   ├── components/
+│   │   │   ├── chat/        # Chat components (message-list, input, toolbar)
+│   │   │   ├── sidebar/     # Session history sidebar
+│   │   │   └── ui/          # Radix UI components
+│   │   ├── hooks/           # React hooks (use-chat, use-sse)
+│   │   └── types/           # TypeScript types
+│   ├── e2e/                 # Playwright tests
+│   └── playwright.config.ts
 └── remlight/
     ├── settings.py          # Environment config
     ├── models/
@@ -368,7 +420,7 @@ remlight/
     ├── api/
     │   ├── main.py          # FastAPI app
     │   ├── mcp_main.py      # MCP server with search, action, ask_agent
-    │   └── routers/         # API endpoints (chat, query, tools)
+    │   └── routers/         # API endpoints (chat, query, tools, agents, sessions, models)
     ├── cli/
     │   └── main.py          # ask, query, ingest, serve, install
     └── services/

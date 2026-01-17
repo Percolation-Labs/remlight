@@ -777,22 +777,24 @@ class AgentContext(BaseModel):
         """
         Construct AgentContext from HTTP headers and load user profile hint.
 
+        Always injects current date/time into the profile hint for agent
+        self-awareness. Also loads user profile if user_id is available.
+
         Args:
             headers: Dictionary of HTTP headers (case-insensitive)
 
         Returns:
-            AgentContext with user profile hint loaded (if available)
+            AgentContext with user profile hint loaded (always includes date/time)
         """
         context = cls.from_headers(headers)
 
-        # Load user profile hint if user_id is set
-        if context.user_id:
-            try:
-                from remlight.api.routers.tools import get_user_profile_hint
-                context = context.model_copy(
-                    update={"user_profile_hint": await get_user_profile_hint(context.user_id)}
-                )
-            except Exception as e:
-                logger.debug(f"Failed to load user profile hint: {e}")
+        # Always load profile hint (includes date/time, and user profile if available)
+        try:
+            from remlight.api.routers.tools import get_user_profile_hint
+            context = context.model_copy(
+                update={"user_profile_hint": await get_user_profile_hint(context.user_id)}
+            )
+        except Exception as e:
+            logger.debug(f"Failed to load user profile hint: {e}")
 
         return context

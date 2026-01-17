@@ -34,6 +34,7 @@ class StreamingState:
     # Tool call tracking
     tool_calls: list[dict] = field(default_factory=list)
     active_tool_calls: dict[int, tuple[str, str]] = field(default_factory=dict)
+    active_tool_indices: dict[int, str] = field(default_factory=dict)  # index -> tool_id
     pending_tool_completions: list[tuple[str, str]] = field(default_factory=list)
     pending_tool_data: dict[str, dict] = field(default_factory=dict)
     current_tool_id: str | None = None
@@ -68,16 +69,22 @@ class StreamingState:
         """Mark that the first chunk has been sent."""
         self.is_first_chunk = False
 
-    def register_tool_call(self, tool_name: str, tool_id: str, index: int, args: dict) -> None:
+    def register_tool_call(self, tool_name: str, tool_id: str, index: int, args: dict | None) -> None:
         """Register a new tool call."""
         self.current_tool_id = tool_id
         self.active_tool_calls[index] = (tool_name, tool_id)
+        self.active_tool_indices[index] = tool_id  # For PartEndEvent lookup
         self.pending_tool_completions.append((tool_name, tool_id))
         self.pending_tool_data[tool_id] = {
             "tool_name": tool_name,
             "tool_id": tool_id,
             "arguments": args,
         }
+
+    def update_tool_args(self, tool_id: str, args: dict | None) -> None:
+        """Update tool call arguments (called at PartEndEvent when args are complete)."""
+        if tool_id in self.pending_tool_data and args is not None:
+            self.pending_tool_data[tool_id]["arguments"] = args
 
     def complete_tool_call(self, result: Any) -> dict | None:
         """Complete a pending tool call and return its data."""

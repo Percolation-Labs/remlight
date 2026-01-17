@@ -1,10 +1,11 @@
 """Core model base class for all REMLight entities."""
 
+import json
 from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class CoreModel(BaseModel):
@@ -23,3 +24,14 @@ class CoreModel(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
+
+    @field_validator("graph_edges", "metadata", mode="before")
+    @classmethod
+    def parse_jsonb(cls, v: Any) -> Any:
+        """Parse JSONB strings from asyncpg into Python objects."""
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return v
+        return v

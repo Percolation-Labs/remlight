@@ -4,12 +4,39 @@ Handles:
 - Child agent events (from ask_agent tool via event sink)
 - Tool call events (from agent execution)
 - Action events (from action() tool)
+
+TOOL ARGUMENT EXTRACTION
+------------------------
+Pydantic-ai uses ArgsDict objects to hold tool arguments. The args may be:
+- None (no arguments)
+- ArgsDict with .args_dict attribute (most common)
+- Plain dict
+- JSON string
+
+The extract_tool_args function handles all these formats.
+
+IMPORTANT: At PartStartEvent, args may be None or incomplete because pydantic-ai
+streams arguments incrementally. Full args are only available at PartEndEvent.
+
+CHILD EVENT PERSISTENCE
+-----------------------
+Child agent tool calls are saved to the database during streaming.
+This ensures session history captures the full multi-agent conversation:
+
+1. child_tool_start -> Saves tool message with arguments
+2. child_content -> Marks state.child_content_streamed = True
+3. child_tool_result -> Emits completion event (action or tool)
+
+The content itself is saved by the parent's post-stream persistence.
 """
 
 import asyncio
 import json
 import uuid
+from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
+
+from loguru import logger
 
 from remlight.agentic.streaming.events import (
     ActionEvent,
@@ -22,18 +49,26 @@ from remlight.agentic.streaming.state import StreamingState
 async def process_child_event(
     child_event: dict,
     state: StreamingState,
+    session_id: str | None = None,
+    user_id: str | None = None,
+    model: str | None = None,
+    agent_schema: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Process a child agent event and yield SSE chunks.
 
     Child events come from ask_agent tool via the event sink.
     Types:
-    - child_tool_start: Child is calling a tool
+    - child_tool_start: Child is calling a tool (saves to DB)
     - child_content: Child is streaming text
     - child_tool_result: Child tool completed
 
     Args:
         child_event: Event dict from child agent
         state: Streaming state (updated in place)
+        session_id: Session ID for persistence (optional)
+        user_id: User ID for persistence (optional)
+        model: Model name for metadata (optional)
+        agent_schema: Agent schema name for metadata (optional)
 
     Yields:
         SSE-formatted strings
@@ -44,15 +79,53 @@ async def process_child_event(
     if event_type == "child_tool_start":
         tool_name = f"{child_agent}:{child_event.get('tool_name', 'tool')}"
         tool_id = f"call_{uuid.uuid4().hex[:8]}"
+        arguments = child_event.get("arguments")
 
+        # Normalize arguments
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = None
+        elif not isinstance(arguments, dict):
+            arguments = None
+
+        # Emit SSE event
         yield format_sse_event(
             ToolCallEvent(
                 tool_name=tool_name,
                 tool_id=tool_id,
                 status="started",
-                arguments=child_event.get("arguments"),
+                arguments=arguments,
             )
         )
+
+        # Save child tool call to database for session persistence
+        if session_id:
+            try:
+                from remlight.services.session import SessionMessageStore
+
+                store = SessionMessageStore(user_id=user_id or "anonymous")
+                # Use child agent name from event, fall back to agent_schema
+                effective_agent = child_agent if child_agent != "child" else agent_schema
+                tool_msg = {
+                    "role": "tool",
+                    # Content is tool args as JSON - parsed on session reload
+                    "content": json.dumps(arguments) if arguments else "",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "tool_call_id": tool_id,
+                    "tool_name": tool_name,
+                    "agent_schema": effective_agent,
+                    "model": model,
+                }
+                await store.store_session_messages(
+                    session_id=session_id,
+                    messages=[tool_msg],
+                    user_id=user_id,
+                    compress=False,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to save child tool call: {e}")
 
     elif event_type == "child_content":
         content = child_event.get("content", "")
@@ -80,16 +153,39 @@ async def process_child_event(
             )
 
 
-def extract_tool_args(raw_args: Any) -> dict:
-    """Extract tool arguments from various formats."""
-    if isinstance(raw_args, dict):
-        return raw_args
-    if isinstance(raw_args, str):
+def extract_tool_args(part_or_args: Any) -> dict | None:
+    """Extract tool arguments from a ToolCallPart or raw args.
+
+    Handles various formats from pydantic-ai:
+    - ToolCallPart object with .args attribute
+    - ArgsDict object with .args_dict attribute
+    - Plain dict
+    - JSON string
+    """
+    # If it's a ToolCallPart, get the .args attribute
+    args = getattr(part_or_args, "args", part_or_args)
+
+    if args is None:
+        return None
+
+    # ArgsDict object from pydantic-ai (the most common case)
+    if hasattr(args, "args_dict"):
+        return args.args_dict
+
+    # Plain dict
+    if isinstance(args, dict):
+        return args
+
+    # JSON string
+    if isinstance(args, str):
+        if not args.strip():
+            return {}
         try:
-            return json.loads(raw_args)
+            return json.loads(args)
         except json.JSONDecodeError:
-            return {"raw": raw_args}
-    return {}
+            return {"raw": args}
+
+    return None
 
 
 async def stream_with_child_events(

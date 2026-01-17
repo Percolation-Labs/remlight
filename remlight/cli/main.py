@@ -361,6 +361,112 @@ def _parse_frontmatter(content: str) -> dict | None:
         return None
 
 
+@cli.command("eval")
+@click.argument("schema_name_or_path")
+@click.option("--model", "-m", help="Model to use (e.g., openai:gpt-4.1)")
+@click.option("--verbose", "-v", is_flag=True, help="Verbose output")
+@click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+def eval_cmd(schema_name_or_path: str, model: str | None, verbose: bool, json_output: bool):
+    """
+    Evaluate an agent's self-awareness.
+
+    Tests whether the agent correctly knows its own configuration:
+    - Identity (name, purpose)
+    - Structure (output properties)
+    - Tools (available tools)
+    - Context (current date/time)
+
+    Examples:
+        rem eval query-agent
+        rem eval schemas/my-agent.yaml --verbose
+        rem eval query-agent --model openai:gpt-4.1
+    """
+    asyncio.run(_eval_async(schema_name_or_path, model, verbose, json_output))
+
+
+async def _eval_async(
+    schema_name_or_path: str,
+    model: str | None,
+    verbose: bool,
+    json_output: bool,
+):
+    """Async implementation of eval command."""
+    import json
+
+    from remlight.agentic.schema import schema_from_yaml_file
+    from remlight.api.routers.tools import get_agent_schema
+    from remlight.settings import settings
+    from tests.eval.test_self_awareness import evaluate_agent_self_awareness
+
+    # Load schema
+    if Path(schema_name_or_path).exists():
+        schema = schema_from_yaml_file(schema_name_or_path)
+    else:
+        schema = get_agent_schema(schema_name_or_path)
+        if schema is None:
+            click.echo(f"Error: Agent '{schema_name_or_path}' not found", err=True)
+            click.echo("Available agents are in the schemas/ directory", err=True)
+            return
+
+    # Run evaluation
+    model_name = model or settings.llm.default_model
+    if not json_output:
+        click.echo(f"\nEvaluating self-awareness for: {schema_name_or_path}")
+        click.echo(f"Using model: {model_name}\n")
+
+    try:
+        evaluation = await evaluate_agent_self_awareness(
+            schema=schema,
+            model_name=model_name,
+            verbose=verbose and not json_output,
+        )
+
+        if json_output:
+            click.echo(json.dumps(evaluation.model_dump(), indent=2))
+        else:
+            # Print summary
+            click.echo(f"\n{'='*50}")
+            click.echo(f"Self-Awareness Evaluation: {evaluation.schema_name}")
+            click.echo(f"{'='*50}")
+            click.echo(f"Overall Score: {evaluation.overall_score:.1%}")
+            click.echo(f"Passed: {evaluation.passed_count}/{evaluation.total_count}")
+
+            # Results by category
+            categories = {}
+            for r in evaluation.results:
+                if r.category not in categories:
+                    categories[r.category] = []
+                categories[r.category].append(r)
+
+            click.echo(f"\nBy Category:")
+            for cat, results in categories.items():
+                cat_score = sum(r.score for r in results) / len(results)
+                passed = sum(1 for r in results if r.passed)
+                status = "" if cat_score >= 0.8 else "" if cat_score >= 0.5 else ""
+                click.echo(f"  {cat.upper():12} {status} {cat_score:.0%} ({passed}/{len(results)} passed)")
+
+            # Issues
+            if evaluation.issues and verbose:
+                click.echo(f"\nIssues Found:")
+                for issue in evaluation.issues[:10]:
+                    click.echo(f"  - {issue[:80]}...")
+
+            # Overall verdict
+            click.echo()
+            if evaluation.overall_score >= 0.8:
+                click.echo(" Agent has good self-awareness!")
+            elif evaluation.overall_score >= 0.5:
+                click.echo(" Agent has partial self-awareness. Review issues above.")
+            else:
+                click.echo(" Agent has poor self-awareness. System prompt may not be reaching the agent.")
+
+    except Exception as e:
+        click.echo(f"Error during evaluation: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+
+
 @cli.command()
 def install():
     """Install database schema (tables, triggers, functions)."""

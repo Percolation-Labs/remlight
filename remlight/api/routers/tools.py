@@ -12,6 +12,7 @@ MCP server and REST API.
 import asyncio
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -76,27 +77,37 @@ async def get_user_profile(user_id: str) -> dict | None:
         return None
 
 
-async def get_user_profile_hint(user_id: str) -> str:
-    """Get formatted user profile hint for agent context."""
-    profile = await get_user_profile(user_id)
-    if not profile:
-        return ""
+async def get_user_profile_hint(user_id: str | None = None) -> str:
+    """Get formatted user profile hint for agent context.
 
+    Always includes current date/time. If user_id provided,
+    also includes user profile information.
+    """
     hints = []
-    if profile.get("name"):
-        hints.append(f"User: {profile['name']}")
-    if profile.get("summary"):
-        hints.append(f"Profile: {profile['summary']}")
-    if profile.get("interests"):
-        interests = profile["interests"]
-        if isinstance(interests, list) and interests:
-            hints.append(f"Interests: {', '.join(interests[:5])}")
-    if profile.get("preferred_topics"):
-        topics = profile["preferred_topics"]
-        if isinstance(topics, list) and topics:
-            hints.append(f"Topics: {', '.join(topics[:5])}")
 
-    return "\n".join(hints) if hints else ""
+    # Always inject current date/time (critical for agent self-awareness)
+    now = datetime.now(timezone.utc)
+    hints.append(f"Date: {now.strftime('%Y-%m-%d')}")
+    hints.append(f"Time: {now.strftime('%H:%M:%S')} UTC")
+
+    # Add user profile if available
+    if user_id:
+        profile = await get_user_profile(user_id)
+        if profile:
+            if profile.get("name"):
+                hints.append(f"User: {profile['name']}")
+            if profile.get("summary"):
+                hints.append(f"Profile: {profile['summary']}")
+            if profile.get("interests"):
+                interests = profile["interests"]
+                if isinstance(interests, list) and interests:
+                    hints.append(f"Interests: {', '.join(interests[:5])}")
+            if profile.get("preferred_topics"):
+                topics = profile["preferred_topics"]
+                if isinstance(topics, list) and topics:
+                    hints.append(f"Topics: {', '.join(topics[:5])}")
+
+    return "\n".join(hints)
 
 
 def format_user_profile(profile: dict) -> str:
@@ -516,11 +527,12 @@ async def ask_agent(
         "input_text": input_text,
     }
 
-    # Add text_response: prefer streamed content, fallback to result.output
-    if use_streaming and streamed_content:
-        response["text_response"] = streamed_content
-    elif hasattr(result, "output") and result.output is not None:
-        response["text_response"] = str(result.output)
+    # IMPORTANT: Only include text_response if content was NOT streamed.
+    # When streaming, child_content events already delivered the content to the client.
+    # Including text_response here would cause duplication.
+    if not use_streaming or not streamed_content:
+        if hasattr(result, "output") and result.output is not None:
+            response["text_response"] = str(result.output)
 
     return response
 

@@ -15,7 +15,7 @@ The flow is: YAML Schema → AgentSchema → Pydantic Model → pydantic_ai.Agen
     3. This module (provider.py) creates the pydantic-ai Agent:
        - Extracts system prompt from schema.description
        - Builds output model from schema.properties (if structured_output=true)
-       - Filters and attaches MCP tools based on schema.tools list
+       - Filters and attaches MCP tools (or resources) based on schema.tools list
        - Configures LLM model, temperature, max_iterations
 
 KEY DESIGN PATTERNS

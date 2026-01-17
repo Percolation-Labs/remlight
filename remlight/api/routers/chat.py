@@ -6,6 +6,7 @@ Provides:
 - Multi-agent support via X-Agent-Schema header
 """
 
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -83,12 +84,18 @@ async def chat_completions(
     context = await AgentContext.from_headers_with_profile(dict(req.headers))
 
     # Get agent schema from header or use default
+    # schema_uri can be an agent name (e.g., "orchestrator-agent") or a path
     schema_uri = req.headers.get("x-agent-schema")
     if schema_uri:
-        try:
-            schema = schema_from_yaml(schema_uri)
-        except Exception:
-            schema = get_default_agent_schema()
+        # First try to look up by name from the registry
+        from remlight.api.routers.tools import get_agent_schema
+        schema = get_agent_schema(schema_uri)
+        if schema is None:
+            # Fall back to trying to parse as YAML content (legacy support)
+            try:
+                schema = schema_from_yaml(schema_uri)
+            except Exception:
+                schema = get_default_agent_schema()
     else:
         schema = get_default_agent_schema()
 
@@ -191,7 +198,7 @@ async def chat_completions(
                 messages=[{
                     "role": "assistant",
                     "content": output_str,
-                    "timestamp": datetime.now(datetime.timezone.utc).isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 }],
                 user_id=user_id,
             )

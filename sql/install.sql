@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     description TEXT,
     agent_name VARCHAR(256),
     status VARCHAR(64) DEFAULT 'active',
+    graph_edges JSONB DEFAULT '[]',
     metadata JSONB DEFAULT '{}',
     tags TEXT[] DEFAULT '{}',
     user_id VARCHAR(256),
@@ -118,8 +119,12 @@ CREATE TABLE IF NOT EXISTS messages (
     role VARCHAR(64) NOT NULL, -- 'user', 'assistant', 'system'
     content TEXT NOT NULL,
     tool_calls JSONB DEFAULT '[]',
+    graph_edges JSONB DEFAULT '[]',
     metadata JSONB DEFAULT '{}',
+    tags TEXT[] DEFAULT '{}',
     embedding VECTOR(1536),
+    trace_id VARCHAR(256),
+    span_id VARCHAR(256),
     user_id VARCHAR(256),
     tenant_id VARCHAR(256),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -130,6 +135,32 @@ CREATE INDEX IF NOT EXISTS messages_session_id_idx ON messages(session_id);
 CREATE INDEX IF NOT EXISTS messages_user_id_idx ON messages(user_id);
 CREATE INDEX IF NOT EXISTS messages_role_idx ON messages(role);
 CREATE INDEX IF NOT EXISTS messages_embedding_idx ON messages USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+
+-- Scenarios (labeled sessions for search and replay)
+CREATE TABLE IF NOT EXISTS scenarios (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(512),
+    description TEXT,
+    session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
+    agent_name VARCHAR(256),
+    status VARCHAR(64) DEFAULT 'active',
+    graph_edges JSONB DEFAULT '[]',
+    metadata JSONB DEFAULT '{}',
+    tags TEXT[] DEFAULT '{}',
+    embedding VECTOR(1536),
+    user_id VARCHAR(256),
+    tenant_id VARCHAR(256),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    deleted_at TIMESTAMP WITH TIME ZONE
+);
+CREATE INDEX IF NOT EXISTS scenarios_user_id_idx ON scenarios(user_id);
+CREATE INDEX IF NOT EXISTS scenarios_session_id_idx ON scenarios(session_id);
+CREATE INDEX IF NOT EXISTS scenarios_status_idx ON scenarios(status);
+CREATE INDEX IF NOT EXISTS scenarios_tags_idx ON scenarios USING GIN (tags);
+CREATE INDEX IF NOT EXISTS scenarios_created_at_idx ON scenarios(created_at);
+CREATE INDEX IF NOT EXISTS scenarios_embedding_idx ON scenarios USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS scenarios_name_trgm_idx ON scenarios USING GIN (name gin_trgm_ops);
 
 -- ============================================
 -- TRIGGERS: Auto-update KV Store
@@ -179,6 +210,12 @@ CREATE TRIGGER resource_kv_trigger
 AFTER INSERT OR UPDATE ON resources
 FOR EACH ROW EXECUTE FUNCTION update_kv_store();
 
+-- Trigger for scenarios
+DROP TRIGGER IF EXISTS scenario_kv_trigger ON scenarios;
+CREATE TRIGGER scenario_kv_trigger
+AFTER INSERT OR UPDATE ON scenarios
+FOR EACH ROW EXECUTE FUNCTION update_kv_store();
+
 -- Auto-update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
@@ -203,6 +240,10 @@ FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 DROP TRIGGER IF EXISTS messages_updated_at ON messages;
 CREATE TRIGGER messages_updated_at BEFORE UPDATE ON messages
+FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS scenarios_updated_at ON scenarios;
+CREATE TRIGGER scenarios_updated_at BEFORE UPDATE ON scenarios
 FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 DROP TRIGGER IF EXISTS kv_store_updated_at ON kv_store;
@@ -282,6 +323,18 @@ BEGIN
           AND (p_user_id IS NULL OR m.user_id = p_user_id OR m.user_id IS NULL)
           AND 1 - (m.embedding <=> p_query_embedding) >= p_min_similarity
         ORDER BY m.embedding <=> p_query_embedding
+        LIMIT p_limit;
+    ELSIF p_table_name = 'scenarios' THEN
+        RETURN QUERY
+        SELECT s.id, s.name, s.description as content,
+               1 - (s.embedding <=> p_query_embedding) as similarity,
+               to_jsonb(s) as data
+        FROM scenarios s
+        WHERE s.embedding IS NOT NULL
+          AND s.deleted_at IS NULL
+          AND (p_user_id IS NULL OR s.user_id = p_user_id OR s.user_id IS NULL)
+          AND 1 - (s.embedding <=> p_query_embedding) >= p_min_similarity
+        ORDER BY s.embedding <=> p_query_embedding
         LIMIT p_limit;
     END IF;
 END;
@@ -423,6 +476,23 @@ DROP TRIGGER IF EXISTS messages_embedding_queue ON messages;
 CREATE TRIGGER messages_embedding_queue
 AFTER INSERT OR UPDATE OF content ON messages
 FOR EACH ROW EXECUTE FUNCTION queue_message_embedding();
+
+-- Scenario embedding queue
+CREATE OR REPLACE FUNCTION queue_scenario_embedding()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.embedding IS NULL AND NEW.description IS NOT NULL THEN
+        INSERT INTO embedding_queue (table_name, record_id, content)
+        VALUES ('scenarios', NEW.id, COALESCE(NEW.name || ': ', '') || NEW.description);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS scenarios_embedding_queue ON scenarios;
+CREATE TRIGGER scenarios_embedding_queue
+AFTER INSERT OR UPDATE OF description ON scenarios
+FOR EACH ROW EXECUTE FUNCTION queue_scenario_embedding();
 
 -- ============================================
 -- DONE
