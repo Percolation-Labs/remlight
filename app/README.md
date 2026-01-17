@@ -1,42 +1,26 @@
 # REMLight Chat Client
 
-A modern React chat client for testing REMLight agents with SSE streaming, tool call visualization, and session management.
-
-## Features
-
-- Gray-scale modern theme with drop shadows
-- SSE streaming with real-time tool call cards (expandable)
-- Agent/model selection in chat toolbar
-- Session history sidebar with search
-- Feedback buttons (thumbs up/down)
-- Add to scenario feature for evaluations
-- Built-in Playwright E2E testing
-- Docker setup with Postgres + nginx
+A simple React app for testing REMLight agents. Use it to chat with agents, review tool call activity, and browse session history.
 
 ## Quick Start
 
 ### Prerequisites
 
-- Docker & Docker Compose (for Postgres database)
-- Node.js 22+ (for frontend)
+- Docker (for Postgres)
+- Node.js 22+
 - Python 3.12+ with uv (for API)
 
-### Recommended: Local Development (Best DX)
-
-For the best development experience, run the API locally with hot reload while using Docker only for Postgres:
+### Local Development
 
 1. **Start Postgres** (from project root):
    ```bash
    docker-compose up postgres -d
    ```
 
-2. **Start the API locally** (from project root):
+2. **Start the API** (from project root):
    ```bash
-   # Create/activate virtual environment
    uv venv && source .venv/bin/activate
    uv sync
-
-   # Start API with hot reload
    uvicorn remlight.api.main:app --host 0.0.0.0 --port 8080 --reload
    ```
 
@@ -48,41 +32,11 @@ For the best development experience, run the API locally with hot reload while u
 
 4. Open http://localhost:3000
 
-### Alternative: Full Docker Setup
-
-The Docker Compose setup is provided for deployment or quick demos, but local development offers better hot reload and debugging:
-
-1. Copy environment file:
-   ```bash
-   cp ../.env.example ../.env
-   # Edit .env with your API keys
-   ```
-
-2. Start all services:
-   ```bash
-   docker-compose up -d
-   ```
-
-3. Open http://localhost:3000
-
-> **Note**: The dockerized API is best for deployment. For active development, run the API locally to get instant hot reload and better debugging.
-
 ## Running Tests
 
-### E2E Tests (Playwright)
-
 ```bash
-# Install Playwright browsers
 npx playwright install
-
-# Run tests
 npx playwright test
-
-# Run with UI
-npx playwright test --ui
-
-# View report
-npx playwright show-report
 ```
 
 ## Project Structure
@@ -92,18 +46,12 @@ app/
 ├── src/
 │   ├── api/              # API client functions
 │   ├── components/
-│   │   ├── chat/         # Chat components
-│   │   ├── sidebar/      # Sidebar components
-│   │   ├── layout/       # Layout components
+│   │   ├── chat/         # Chat view, messages, tool cards
+│   │   ├── sidebar/      # Session list and search
 │   │   └── ui/           # shadcn/ui components
-│   ├── hooks/            # Custom React hooks
-│   ├── lib/              # Utilities
-│   ├── pages/            # Page components
+│   ├── hooks/            # use-chat, use-sse, use-sessions
 │   └── types/            # TypeScript types
 ├── e2e/                  # Playwright tests
-├── Dockerfile
-├── docker-compose.yml
-├── nginx.conf
 └── playwright.config.ts
 ```
 
@@ -112,23 +60,3 @@ app/
 | Variable | Description | Default |
 |----------|-------------|---------|
 | VITE_API_BASE_URL | API endpoint | /api |
-
-## API Endpoints
-
-The chat client expects the following API endpoints:
-
-- `POST /api/v1/chat/completions` - Chat completions with SSE streaming
-- `GET /api/v1/agents` - List available agents
-- `GET /api/v1/sessions` - List user sessions
-- `GET /api/v1/sessions/:id/messages` - Get session messages
-- `POST /api/v1/feedback` - Submit message feedback
-- `POST /api/v1/scenarios` - Create test scenario
-
-## Tech Stack
-
-- React 18 + Vite + TypeScript
-- shadcn/ui + Radix UI
-- Tailwind CSS v4 (gray-scale theme)
-- lucide-react (icons)
-- react-markdown + react-syntax-highlighter
-- Playwright (E2E testing)
