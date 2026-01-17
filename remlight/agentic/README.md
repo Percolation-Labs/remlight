@@ -524,3 +524,10 @@ from remlight.services.repository import Repository
 - [ ] ask_agent loads session history
 - [ ] Child content deduplication works
 - [ ] Tool messages never compressed
+
+## Related Documentation
+
+- [schemas/README.md](../../../schemas/README.md) - YAML agent schema format, structured output options, tool references
+- [examples/README.md](../../../examples/README.md) - Session storage format and SSE streaming examples
+- [services/session/README.md](../services/session/README.md) - Session and message persistence details
+- [api/README.md](../api/README.md) - API endpoints and routing

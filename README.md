@@ -163,12 +163,39 @@ LLM__DEFAULT_MODEL=openai:gpt-4.1
 LOGURU_LEVEL=DEBUG  # Show tool calls
 ```
 
-## More Information
+## Documentation
 
-- **REM Query Language**: See [ontology/reference/rem-query.md](ontology/reference/rem-query.md)
-- **Database Schema**: See [sql/erd.md](sql/erd.md)
-- **API Documentation**: See [remlight/api/README.md](remlight/api/README.md)
-- **Streaming Architecture**: See [remlight/agentic/README.md](remlight/agentic/README.md)
+### Core Components
+
+| Document | Description |
+|----------|-------------|
+| [remlight/api/README.md](remlight/api/README.md) | FastAPI endpoints and routing |
+| [remlight/agentic/README.md](remlight/agentic/README.md) | Streaming architecture and multi-agent context |
+| [remlight/services/session/README.md](remlight/services/session/README.md) | Session and message persistence |
+
+### Configuration
+
+| Document | Description |
+|----------|-------------|
+| [schemas/README.md](schemas/README.md) | Agent YAML schema format and options |
+| [sql/erd.md](sql/erd.md) | Database schema and ERD |
+
+### Knowledge Base
+
+| Document | Description |
+|----------|-------------|
+| [ontology/README.md](ontology/README.md) | Self-documenting knowledge base index |
+| [ontology/reference/](ontology/reference/) | REM query language, agent schema spec |
+| [ontology/design/](ontology/design/) | Architecture and entity design |
+| [ontology/guides/](ontology/guides/) | How-to guides |
+
+### Frontend & Examples
+
+| Document | Description |
+|----------|-------------|
+| [app/README.md](app/README.md) | React chat client setup and features |
+| [examples/README.md](examples/README.md) | Session storage and SSE streaming examples |
+| [tests/README.md](tests/README.md) | Test suite documentation |
 
 ## License
 
