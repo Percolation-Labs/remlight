@@ -14,8 +14,9 @@ A simple React app for testing REMLight agents. Use it to chat with agents, revi
 
 1. **Start Postgres** (from project root):
    ```bash
-   docker-compose up postgres -d
+   docker compose up postgres -d
    ```
+   > Tables are auto-created on first startup.
 
 2. **Start the API** (from project root):
    ```bash

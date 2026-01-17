@@ -24,59 +24,57 @@ REM provides the underlying memory layer:
 
 ### Prerequisites
 
-- Docker (for PostgreSQL with pgvector)
+- Docker
 - Python 3.12+ with [uv](https://docs.astral.sh/uv/)
 - Node.js 22+ (for chat client)
 
-### 1. Start PostgreSQL
-
-```bash
-docker run -d --name remlight-pg \
-  -e POSTGRES_DB=remlight \
-  -e POSTGRES_USER=remlight \
-  -e POSTGRES_PASSWORD=remlight \
-  -p 5432:5432 \
-  pgvector/pgvector:pg18
-```
-
-### 2. Install REMLight
+### 1. Clone and Install
 
 ```bash
 git clone https://github.com/mr-saoirse/remlight
 cd remlight
 
-# Create virtual environment and install
 uv venv && source .venv/bin/activate
 uv sync
 
-# Set your API key
 export OPENAI_API_KEY=your-key
 ```
 
-### 3. Initialize Database
+### 2. Start PostgreSQL
 
 ```bash
-rem install       # Create tables and functions
-rem ingest ontology/  # Load sample knowledge base
+docker compose up postgres -d
 ```
 
-### 4. Start the API
+### 3. Load the Knowledge Base
+
+```bash
+rem ingest ontology/
+```
+
+### 4. Test REM Queries
+
+```bash
+# O(1) lookup by key
+rem query "LOOKUP architecture"
+
+# Semantic search
+rem query "SEARCH agents IN ontology"
+
+# Fuzzy text match
+rem query "FUZZY streaming"
+```
+
+### 5. Start the API and Ask an Agent
 
 ```bash
 rem serve --port 8080
 ```
 
-### 5. Try It Out
+In another terminal:
 
 ```bash
-# Ask an agent
-rem ask "What is machine learning?"
-
-# Execute REM queries
-rem query "LOOKUP architecture"
-rem query "SEARCH agents IN ontology"
-
-# Multi-agent orchestration
+rem ask "What is REMLight?"
 rem ask "Count to 5" --schema orchestrator-agent
 ```
 
