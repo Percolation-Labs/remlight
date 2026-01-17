@@ -21,7 +21,7 @@ docker compose logs -f api
 
 That's it! Services are now running:
 - **API**: http://localhost:8080
-- **Phoenix UI**: http://localhost:6006 (LLM observability)
+- **Phoenix UI**: http://localhost:6016 (LLM observability)
 
 ## Verify Installation
 
@@ -70,11 +70,17 @@ rem serve
 curl -X POST http://localhost:8080/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "X-User-Id: demo-user" \
+  -H "X-Agent-Schema: query-agent" \
   -d '{
     "messages": [{"role": "user", "content": "Hello!"}],
     "stream": false
   }'
 ```
+
+The `X-Agent-Schema` header selects which agent handles the request. Available agents:
+- `query-agent` - Search the knowledge base
+- `action-agent` - Record observations
+- `orchestrator-agent` - Delegate to other agents
 
 ## Query Example
 

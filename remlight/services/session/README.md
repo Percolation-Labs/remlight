@@ -75,8 +75,8 @@ class SessionMessageStore:
     def __init__(self, user_id: str, compressor: MessageCompressor | None = None):
         self.user_id = user_id
         self.compressor = compressor or MessageCompressor()
-        self.repo = Repository(Message)
-        self._session_repo = Repository(Session, table_name="sessions")
+        self._message_repo = Repository(Message)
+        self._session_repo = Repository(Session)
 ```
 
 #### Methods
@@ -91,8 +91,8 @@ async def store_message(self, session_id: str, message: dict, message_index: int
 async def retrieve_message(self, entity_key: str) -> str | None:
     """Retrieve full message content by REM lookup key."""
 
-async def store_session_messages(self, session_id: str, messages: list[dict], user_id: str | None, compress: bool = True) -> list[dict]:
-    """Store all session messages, return compressed versions."""
+async def store_session_messages(self, session_id: str, messages: list[dict], user_id: str | None, compress: bool = False) -> list[dict]:
+    """Store all session messages, return optionally compressed versions."""
 
 async def load_session_messages(self, session_id: str, user_id: str | None, compress_on_load: bool = True) -> list[dict]:
     """Load messages from database, optionally compress long assistant messages."""
@@ -151,8 +151,8 @@ def audit_session_history(
     pydantic_messages_count: int,
 ) -> None:
     """
-    Only runs when settings.debug.audit_session is True.
-    Writes to settings.debug.audit_dir (default /tmp).
+    Only runs when DEBUG_AUDIT_SESSION environment variable is set.
+    Writes to DEBUG_AUDIT_DIR env var path (default /tmp).
     """
 ```
 
@@ -200,7 +200,7 @@ Messages table:
 CREATE TABLE messages (
     id UUID PRIMARY KEY,
     session_id UUID REFERENCES sessions(id),
-    message_type VARCHAR(50),  -- 'user', 'assistant', 'tool'
+    role VARCHAR(50),  -- 'user', 'assistant', 'tool'
     content TEXT,
     user_id VARCHAR(255),
     tenant_id VARCHAR(255),
@@ -256,6 +256,7 @@ await store.store_session_messages(session_id, [{"role": "assistant", "content":
 ## Settings Integration
 
 ```python
+import os
 from remlight.settings import settings
 
 # All DB operations must check this
@@ -263,8 +264,8 @@ if not settings.postgres.enabled:
     logger.debug("Postgres disabled, skipping storage")
     return []
 
-# Audit logging
-if settings.debug.audit_session:
+# Audit logging (enabled via environment variable)
+if os.environ.get("DEBUG_AUDIT_SESSION"):
     audit_session_history(...)
 ```
 

@@ -1,14 +1,82 @@
-"""Session message storage for conversation history.
+"""
+Session Message Storage - Persistence for Multi-Turn Conversations
+===================================================================
 
-Design Pattern:
-- All messages stored UNCOMPRESSED in the database for full audit/analysis
-- Compression happens only on RELOAD when reconstructing context for the LLM
-- Tool messages (role: "tool") are NEVER compressed - contain structured metadata
+This module handles storing and retrieving conversation messages. It enables
+multi-turn conversations by persisting messages to PostgreSQL.
 
-Message Types:
-- user: User messages - stored and reloaded as-is
-- tool: Tool call messages (e.g., register_metadata) - NEVER compressed
-- assistant: May be compressed on reload if long (>400 chars) with REM LOOKUP hints
+THE "STORE UNCOMPRESSED, COMPRESS ON LOAD" PATTERN
+--------------------------------------------------
+
+This is the KEY DESIGN DECISION of the session system:
+
+    STORE (uncompressed)         LOAD (compressed)
+          │                            │
+          ▼                            ▼
+    ┌─────────────┐              ┌─────────────┐
+    │  Database   │              │  Database   │
+    │             │              │             │
+    │ Full        │              │ Full        │
+    │ messages    │──────────────│ messages    │
+    │ stored      │              │ stored      │
+    └─────────────┘              └─────────────┘
+          │                            │
+          │                            │ ← Compress on read
+          ▼                            ▼
+    Full audit trail             Context-efficient
+    for analytics                for LLM
+
+WHY THIS PATTERN?
+
+1. **Full Audit Trail**: Every message is stored in full. This enables:
+   - Analytics on conversation patterns
+   - Debugging issues
+   - Compliance/auditing requirements
+   - No data loss
+
+2. **Efficient LLM Context**: When loading for agent execution:
+   - Long assistant messages are truncated
+   - REM LOOKUP hints inserted for recovery
+   - Keeps context window manageable
+
+3. **Flexibility**: Different loads can have different compression:
+   - LLM context: aggressive compression
+   - Audit export: no compression
+   - Analytics: selective compression
+
+
+MESSAGE COMPRESSION RULES
+-------------------------
+
+| Role      | Compression on Load        |
+|-----------|---------------------------|
+| user      | NEVER - user input sacred  |
+| tool      | NEVER - structured metadata|
+| assistant | IF length > 400 chars      |
+
+Tool messages are NEVER compressed because they contain:
+- tool_call_id (needed for message reconstruction)
+- tool_name (needed for pydantic-ai format)
+- tool_arguments (needed for conversation replay)
+- Structured result data
+
+REM LOOKUP PATTERN
+------------------
+
+When a long assistant message is compressed, we insert a hint:
+
+    {first 200 chars}
+
+    ... [Message truncated - REM LOOKUP session-{id}-msg-{idx} to recover full content] ...
+
+    {last 200 chars}
+
+This enables the agent to:
+1. See the beginning and end for context
+2. Retrieve full content via REM LOOKUP if needed
+3. Know exactly how to recover the content
+
+The entity_key format is deterministic, enabling O(1) lookup.
 """
 
 import hashlib
@@ -23,14 +91,31 @@ from remlight.services.repository import Repository
 from remlight.settings import settings
 
 
-# Max length for entity keys
+# PostgreSQL has limits on VARCHAR/TEXT index sizes
+# Entity keys are used in indexes, so we cap their length
 MAX_ENTITY_KEY_LENGTH = 255
 
 
 def truncate_key(key: str, max_length: int = MAX_ENTITY_KEY_LENGTH) -> str:
-    """Truncate a key to max length, preserving useful suffix if possible."""
+    """
+    Truncate an entity key to fit database constraints.
+
+    Entity keys (like "session-{uuid}-msg-{idx}") can get long.
+    PostgreSQL indexes have size limits, so we truncate if needed.
+
+    To maintain uniqueness after truncation, we append an MD5 hash suffix.
+    This ensures different long keys don't collide after truncation.
+
+    Args:
+        key: The entity key to (possibly) truncate
+        max_length: Maximum allowed length
+
+    Returns:
+        Original key if short enough, or truncated key with hash suffix
+    """
     if len(key) <= max_length:
         return key
+    # Append hash to maintain uniqueness after truncation
     hash_suffix = hashlib.md5(key.encode()).hexdigest()[:8]
     truncated = key[: max_length - 9] + "-" + hash_suffix
     logger.warning(f"Truncated key from {len(key)} to {len(truncated)} chars: {key[:50]}...")
@@ -38,51 +123,114 @@ def truncate_key(key: str, max_length: int = MAX_ENTITY_KEY_LENGTH) -> str:
 
 
 class MessageCompressor:
-    """Compress and decompress session messages with REM lookup keys."""
+    """
+    Compress and decompress session messages with REM LOOKUP recovery.
+
+    This class handles the compression logic for long assistant messages.
+    It's used ONLY during message loading (not storage).
+
+    COMPRESSION STRATEGY
+    -------------------
+    Keep first N and last N characters, replace middle with LOOKUP hint:
+
+        {first 200 chars}
+
+        ... [Message truncated - REM LOOKUP {key} to recover full content] ...
+
+        {last 200 chars}
+
+    This preserves:
+    - Opening context (what the assistant started saying)
+    - Closing context (how the assistant concluded)
+    - Recovery path (the exact LOOKUP key)
+
+    WHY 200 CHARACTERS?
+    ------------------
+    - Long enough to preserve meaningful context
+    - Short enough to save significant tokens
+    - 400 char threshold = 2x200 = minimum for compression to make sense
+    """
 
     def __init__(self, truncate_length: int = 200):
         """
         Initialize message compressor.
 
         Args:
-            truncate_length: Number of characters to keep from start/end (default: 200)
+            truncate_length: Characters to keep from start AND end (default: 200)
+                            Total preserved = 2 * truncate_length = 400 chars minimum
         """
         self.truncate_length = truncate_length
+        # Only compress if longer than 2x truncate_length (400 chars by default)
         self.min_length_for_compression = truncate_length * 2
 
     def compress_message(
         self, message: dict[str, Any], entity_key: str | None = None
     ) -> dict[str, Any]:
         """
-        Compress a message by truncating long content and adding REM lookup key.
+        Compress a message by truncating content and adding REM LOOKUP hint.
+
+        COMPRESSION PROCESS
+        ------------------
+        1. Check if message qualifies (long enough, right role)
+        2. Extract first N and last N characters
+        3. Insert REM LOOKUP hint in the middle
+        4. Add metadata flags for tracking
+
+        OUTPUT FORMAT
+        ------------
+        Original (1500 chars):
+            "Machine learning is a subset of AI that... [1500 chars of explanation]"
+
+        Compressed (450 chars):
+            "Machine learning is a subset of AI that... [200 chars]
+
+            ... [Message truncated - REM LOOKUP session-abc-msg-3 to recover full content] ...
+
+            [last 200 chars] ...applications in many fields."
+
+        METADATA FLAGS
+        -------------
+        Compressed messages include:
+        - _compressed: True (marker for is_compressed())
+        - _original_length: Original content length
+        - _entity_key: REM LOOKUP key for recovery
+
+        These flags enable:
+        - Detecting compressed messages
+        - Showing "(truncated)" in UI
+        - Recovering full content on demand
 
         Args:
             message: Message dict with role and content
-            entity_key: Optional REM lookup key for full message recovery
+            entity_key: REM LOOKUP key for recovery (e.g., "session-abc-msg-3")
 
         Returns:
-            Compressed message dict
+            Compressed message dict (or copy of original if not compressible)
         """
         content = message.get("content") or ""
 
         # Don't compress short messages or system messages
+        # System messages are rare and usually configuration, not conversation
         if (
             len(content) <= self.min_length_for_compression
             or message.get("role") == "system"
         ):
             return message.copy()
 
-        # Compress long messages
+        # Compress: keep first N and last N chars
         n = self.truncate_length
         start = content[:n]
         end = content[-n:]
 
-        # Create compressed content with REM lookup hint
+        # Create compressed content with REM LOOKUP hint
         if entity_key:
+            # Include recoverable key for agent to use
             compressed_content = f"{start}\n\n... [Message truncated - REM LOOKUP {entity_key} to recover full content] ...\n\n{end}"
         else:
+            # No key = no recovery path, just show omission
             compressed_content = f"{start}\n\n... [Message truncated - {len(content) - 2*n} characters omitted] ...\n\n{end}"
 
+        # Build compressed message with metadata
         compressed_message = message.copy()
         compressed_message["content"] = compressed_content
         compressed_message["_compressed"] = True
@@ -127,16 +275,49 @@ class MessageCompressor:
 
 
 class SessionMessageStore:
-    """Store and retrieve session messages with compression.
+    """
+    Store and retrieve session messages with compression support.
 
-    Usage:
-        store = SessionMessageStore(user_id="user-123")
+    This is the PRIMARY interface for message persistence. It handles:
+    - Storing messages to PostgreSQL (uncompressed for full audit trail)
+    - Loading messages (optionally compressed for LLM context efficiency)
+    - Session creation/management
+    - REM LOOKUP key generation for message recovery
 
-        # Store messages (uncompressed in DB)
+    USAGE PATTERN IN STREAMING
+    -------------------------
+    The streaming layer uses this store in two phases:
+
+        # BEFORE agent execution
+        await save_user_message(session_id, user_id, prompt)
+
+        # AFTER agent execution (in stream_sse_with_save)
+        store = SessionMessageStore(user_id)
         await store.store_session_messages(session_id, messages)
 
-        # Load messages (optionally compressed for LLM context)
-        history = await store.load_session_messages(session_id, compress_on_load=True)
+    USAGE PATTERN IN AGENT LOADING
+    -----------------------------
+    Before running an agent with history:
+
+        store = SessionMessageStore(user_id)
+        raw_history = await store.load_session_messages(
+            session_id,
+            compress_on_load=True  # Compress for LLM efficiency
+        )
+        pydantic_history = session_to_pydantic_messages(raw_history, system_prompt)
+        await agent.run(prompt, message_history=pydantic_history)
+
+    DATA ISOLATION
+    --------------
+    The user_id parameter provides data isolation:
+    - Messages are stored with user_id
+    - Loading filters by user_id
+    - Users can only see their own messages
+
+    REPOSITORY PATTERN
+    -----------------
+    Uses the generic Repository for all database operations.
+    No raw SQL in this class - all queries go through Repository.
     """
 
     def __init__(self, user_id: str, compressor: MessageCompressor | None = None):
@@ -144,11 +325,15 @@ class SessionMessageStore:
         Initialize session message store.
 
         Args:
-            user_id: User identifier for data isolation
-            compressor: Optional message compressor (creates default if None)
+            user_id: User identifier for data isolation.
+                    All stored messages will have this user_id.
+                    Loading will filter by this user_id.
+            compressor: Optional custom MessageCompressor.
+                       Creates default (200 char truncation) if None.
         """
         self.user_id = user_id
         self.compressor = compressor or MessageCompressor()
+        # Use Repository pattern for all database operations
         self._message_repo = Repository(Message)
         self._session_repo = Repository(Session)
 
@@ -158,26 +343,45 @@ class SessionMessageStore:
         user_id: str | None = None,
     ) -> None:
         """
-        Ensure session exists, creating it if necessary.
+        Ensure session exists in database, creating if necessary.
+
+        AUTO-CREATION PATTERN
+        --------------------
+        Sessions are auto-created on first message storage. This enables:
+        - Simple client API (just pass session_id, no explicit create)
+        - Idempotent operations (safe to call multiple times)
+        - Lazy creation (sessions only exist if messages exist)
+
+        The session_id comes from the client (X-Session-Id header).
+        It's typically a UUID generated by the frontend on conversation start.
+
+        BEST-EFFORT CREATION
+        -------------------
+        Session creation is best-effort. If it fails:
+        - We log a warning
+        - We continue with message storage
+        - Foreign key constraints may fail, but that's caught elsewhere
+
+        This ensures session issues don't block message storage.
 
         Args:
-            session_id: Session UUID from X-Session-Id header
-            user_id: Optional user identifier
+            session_id: UUID from client (X-Session-Id header)
+            user_id: Optional user for session ownership
         """
         if not settings.postgres.enabled:
             logger.debug("Postgres disabled, skipping session check")
             return
 
         try:
-            # Check if session already exists by UUID
+            # Check if session already exists
             existing = await self._session_repo.get(session_id)
             if existing:
-                return  # Session already exists
+                return  # Session already exists, nothing to do
 
-            # Create new session with the provided UUID as id
+            # Create new session with client-provided UUID as ID
             session_data = {
                 "id": session_id,
-                "name": session_id,  # Default name to UUID
+                "name": session_id,  # Default name to UUID (can be updated later)
                 "user_id": user_id or self.user_id,
                 "tenant_id": self.user_id,
                 "status": "active",
@@ -186,7 +390,8 @@ class SessionMessageStore:
             logger.info(f"Created session {session_id} for user {user_id or self.user_id}")
 
         except Exception as e:
-            # Log but don't fail - session creation is best-effort
+            # Best-effort: log but don't fail
+            # Message storage may still work if session exists from elsewhere
             logger.warning(f"Failed to ensure session exists: {e}")
 
     async def store_message(
@@ -365,38 +570,73 @@ class SessionMessageStore:
         compress_on_load: bool = True,
     ) -> list[dict[str, Any]]:
         """
-        Load session messages from database.
+        Load session messages from database for conversation replay.
 
-        Compression on Load:
-        - Tool messages (role: "tool") are NEVER compressed
-        - User messages are returned as-is
-        - Assistant messages MAY be compressed if long with REM LOOKUP hints
+        This is the CORE METHOD for context reconstruction. It loads stored
+        messages and optionally compresses them for LLM context efficiency.
+
+        THE LOADING PIPELINE
+        -------------------
+        1. Query database for session messages (via Repository)
+        2. Filter by tenant_id for data isolation
+        3. Parse metadata from JSONB column
+        4. Reconstruct tool call info for tool messages
+        5. Optionally compress long assistant messages
+        6. Return in chronological order
+
+        COMPRESSION RULES
+        ----------------
+        | Role      | compress_on_load=True     | compress_on_load=False |
+        |-----------|---------------------------|------------------------|
+        | user      | Never compressed          | Never compressed       |
+        | tool      | Never compressed          | Never compressed       |
+        | assistant | Compressed if >400 chars  | Never compressed       |
+
+        Tool messages are NEVER compressed because they contain structured
+        metadata (tool_call_id, tool_name, tool_arguments) that's needed
+        for pydantic-ai message reconstruction.
+
+        METADATA RECONSTRUCTION
+        ----------------------
+        Tool messages have metadata stored as JSONB:
+            {"tool_call_id": "call_abc", "tool_name": "search", "tool_arguments": {...}}
+
+        This metadata is extracted and added to the message dict for
+        session_to_pydantic_messages() to use.
 
         Args:
-            session_id: Session identifier
-            user_id: Optional user identifier for filtering
-            compress_on_load: Whether to compress long assistant messages (default: True)
+            session_id: Session identifier (UUID)
+            user_id: Optional user filter (uses self.user_id if not provided)
+            compress_on_load: Whether to compress long assistant messages
+                             True = efficient LLM context
+                             False = full content (for debugging/export)
 
         Returns:
-            List of session messages in chronological order
+            List of message dicts in chronological order:
+            [
+                {"role": "user", "content": "Hello", "timestamp": "..."},
+                {"role": "assistant", "content": "Hi there", "timestamp": "..."},
+                {"role": "tool", "content": "{...}", "tool_name": "search", ...},
+            ]
         """
         if not settings.postgres.enabled:
             logger.debug("Postgres disabled, returning empty message list")
             return []
 
         try:
-            # Load messages using repository
+            # Load messages via Repository (ordered by created_at ASC)
             rows = await self._message_repo.get_by_session(session_id)
 
-            # Filter by tenant_id (user_id for isolation)
+            # Filter by tenant_id for data isolation
+            # This ensures users only see their own messages
             rows = [r for r in rows if r.get("tenant_id") == self.user_id]
 
             message_dicts = []
             for idx, row in enumerate(rows):
-                role = row.get("role") or "assistant"  # DB column is 'role'
+                role = row.get("role") or "assistant"
                 content = row.get("content") or ""
 
-                # Parse metadata
+                # Parse metadata from JSONB column
                 metadata = row.get("metadata")
                 if isinstance(metadata, str):
                     try:
@@ -405,6 +645,7 @@ class SessionMessageStore:
                         metadata = {}
                 metadata = metadata or {}
 
+                # Build base message dict
                 msg_dict: dict[str, Any] = {
                     "role": role,
                     "content": content,
@@ -412,6 +653,7 @@ class SessionMessageStore:
                 }
 
                 # For tool messages, reconstruct tool call metadata
+                # This is critical for session_to_pydantic_messages()
                 if role == "tool" and metadata:
                     if metadata.get("tool_call_id"):
                         msg_dict["tool_call_id"] = metadata["tool_call_id"]
@@ -420,12 +662,20 @@ class SessionMessageStore:
                     if metadata.get("tool_arguments"):
                         msg_dict["tool_arguments"] = metadata["tool_arguments"]
 
-                # Compress long ASSISTANT messages on load (NEVER tool messages)
+                # =============================================================
+                # CONDITIONAL COMPRESSION
+                # =============================================================
+                # Only compress:
+                # - When compress_on_load=True
+                # - For assistant messages (user and tool never compressed)
+                # - For messages exceeding min_length_for_compression (400 chars)
+                # =============================================================
                 if (
                     compress_on_load
                     and role == "assistant"
                     and len(content) > self.compressor.min_length_for_compression
                 ):
+                    # Generate deterministic entity key for REM LOOKUP recovery
                     entity_key = truncate_key(f"session-{session_id}-msg-{idx}")
                     msg_dict = self.compressor.compress_message(msg_dict, entity_key)
 
@@ -439,6 +689,7 @@ class SessionMessageStore:
 
         except Exception as e:
             logger.error(f"Failed to load session messages: {e}")
+            # Return empty list on error - don't crash the agent
             return []
 
     async def retrieve_full_message(self, session_id: str, message_index: int) -> str | None:

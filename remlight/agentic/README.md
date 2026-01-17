@@ -108,8 +108,9 @@ class AgentContext(BaseModel):
     session_id: str | None = Field(default=None)
     default_model: str = Field(default_factory=lambda: settings.llm.default_model)
     agent_schema_uri: str | None = Field(default=None)
-    is_eval: bool = Field(default=False)      # REQUIRED - marks evaluation sessions
-    client_id: str | None = Field(default=None)  # REQUIRED - e.g., "web", "mobile", "cli"
+    is_eval: bool = Field(default=False)      # Marks evaluation sessions
+    client_id: str | None = Field(default=None)  # e.g., "web", "mobile", "cli"
+    user_profile_hint: str | None = Field(default=None)  # Pre-loaded user context
 
     model_config = {"populate_by_name": True}
 ```
@@ -146,7 +147,7 @@ def get_user_id_or_default(user_id: str | None, source: str, default: str | None
     """
 
 def child_context(self, agent_schema_uri: str | None = None, model_override: str | None = None) -> "AgentContext":
-    """Create child context for nested agent calls - inherits user_id, tenant_id, session_id, is_eval, client_id."""
+    """Create child context for nested agent calls - inherits user_id, tenant_id, session_id, is_eval, client_id, user_profile_hint."""
 ```
 
 #### Context Headers Mapping
@@ -318,20 +319,18 @@ from remlight.services.repository import Repository
 from remlight.models.entities import Message, Session
 
 class SessionMessageStore:
-    def __init__(self, user_id: str):
+    def __init__(self, user_id: str, compressor: MessageCompressor | None = None):
         self.user_id = user_id
-        self.repo = Repository(Message)
-        self._session_repo = Repository(Session, table_name="sessions")
+        self.compressor = compressor or MessageCompressor()
+        self._message_repo = Repository(Message)
+        self._session_repo = Repository(Session)
 
     async def store_message(self, ...):
         msg = Message(...)
-        await self.repo.upsert(msg)  # NOT raw SQL
+        await self._message_repo.create(msg)  # NOT raw SQL
 
     async def load_messages(self, session_id: str):
-        return await self.repo.find(
-            {"session_id": session_id, "tenant_id": self.user_id},
-            order_by="created_at ASC"
-        )
+        return await self._message_repo.get_by_session(session_id)
 ```
 
 ### 5. Settings Checks

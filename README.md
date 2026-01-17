@@ -26,7 +26,7 @@ export OPENAI_API_KEY=your-key
 docker-compose up -d
 
 # API available at http://localhost:8080
-# Phoenix UI at http://localhost:6006
+# Phoenix UI at http://localhost:6016
 ```
 
 ### Local Development
