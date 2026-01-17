@@ -1,31 +1,87 @@
+# ==============================================================================
 # REMLight Dockerfile
-FROM python:3.12-slim-bookworm
+# Minimal declarative agent framework with PostgreSQL memory
+# Built with uv for fast, deterministic builds
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Stage 1: Builder - Install dependencies with uv
+# ------------------------------------------------------------------------------
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    ca-certificates \
+# Install build dependencies for packages with native extensions
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy project files
-COPY pyproject.toml README.md ./
+# Disable bytecode compilation for faster builds
+ENV UV_COMPILE_BYTECODE=0
+
+# Copy dependency files first for better layer caching
+COPY pyproject.toml uv.lock README.md ./
+
+# Copy source code
 COPY remlight/ ./remlight/
-COPY sql/ ./sql/
-COPY schemas/ ./schemas/
 
-# Install Python dependencies (including tracing for Phoenix)
-RUN pip install --no-cache-dir -e ".[tracing]"
+# Install dependencies and the package into .venv
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev
 
-# Environment
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+# ------------------------------------------------------------------------------
+# Stage 2: Runtime - Minimal production image
+# ------------------------------------------------------------------------------
+FROM python:3.12-slim-bookworm AS runtime
 
+WORKDIR /app
+
+# Install runtime dependencies:
+# - curl: health checks
+# - ca-certificates: SSL/TLS connections
+# - tesseract-ocr: OCR engine for PDF/image parsing
+# - tesseract-ocr-eng: English language data for Tesseract
+# - ffmpeg: Audio/video processing
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create non-root user for security
+RUN useradd -m -u 1000 -s /bin/bash remlight && \
+    chown -R remlight:remlight /app
+
+# Copy virtual environment from builder
+COPY --from=builder --chown=remlight:remlight /app/.venv /app/.venv
+
+# Copy source code from builder
+COPY --from=builder --chown=remlight:remlight /app/remlight /app/remlight
+
+# Copy additional required files
+COPY --chown=remlight:remlight sql/ ./sql/
+COPY --chown=remlight:remlight schemas/ ./schemas/
+
+# Set environment variables
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONFAULTHANDLER=1
+
+# Switch to non-root user
+USER remlight
+
+# Expose API port
 EXPOSE 8000
 
-# Default: API server with reload for development
-CMD ["uvicorn", "remlight.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Default: API server with uvicorn
+CMD ["uvicorn", "remlight.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

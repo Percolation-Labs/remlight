@@ -18,8 +18,8 @@ from uuid import uuid4
 
 from loguru import logger
 
-from remlight.services.database import get_db
-from remlight.services.repository import MessageRepository, SessionRepository
+from remlight.models.entities import Message, Session
+from remlight.services.repository import Repository
 from remlight.settings import settings
 
 
@@ -149,9 +149,8 @@ class SessionMessageStore:
         """
         self.user_id = user_id
         self.compressor = compressor or MessageCompressor()
-        self._db = get_db()
-        self._message_repo = MessageRepository(self._db)
-        self._session_repo = SessionRepository(self._db)
+        self._message_repo = Repository(Message)
+        self._session_repo = Repository(Session)
 
     async def _ensure_session_exists(
         self,
@@ -266,7 +265,7 @@ class SessionMessageStore:
                   AND deleted_at IS NULL
                 LIMIT 1
             """
-            row = await self._db.fetchrow(query, entity_key, self.user_id)
+            row = await self._message_repo.db.fetchrow(query, entity_key, self.user_id)
 
             if row:
                 logger.debug(f"Retrieved message via LOOKUP: {entity_key}")

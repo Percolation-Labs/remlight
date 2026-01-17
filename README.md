@@ -2,6 +2,8 @@
 
 Minimal declarative agent framework with PostgreSQL memory and multi-agent support.
 
+Read the article: [A Really Simple Declarative Agent Framework (Part I)](https://medium.com/@mrsirsh/a-really-simply-declarative-agent-framework-part-i-6ae2b05fb2a1)
+
 ## Features
 
 - **Declarative Agents**: Define agents in YAML with JSON Schema

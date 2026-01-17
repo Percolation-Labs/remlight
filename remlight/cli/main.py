@@ -247,8 +247,9 @@ def ingest(path: str, table: str, pattern: str, dry_run: bool):
 
 async def _ingest_async(path: str, table: str, pattern: str, dry_run: bool):
     """Async implementation of ingest command."""
+    from remlight.models.entities import Ontology, Resource
     from remlight.services.database import get_db
-    from remlight.services.repository import OntologyRepository, ResourceRepository
+    from remlight.services.repository import Repository
 
     input_path = Path(path)
 
@@ -284,9 +285,11 @@ async def _ingest_async(path: str, table: str, pattern: str, dry_run: bool):
     try:
         # Create appropriate repository
         if table in ("ontology", "ontologies"):
-            repo = OntologyRepository(db)
+            repo = Repository(Ontology, table_name="ontologies")
+            model_class = Ontology
         elif table == "resources":
-            repo = ResourceRepository(db)
+            repo = Repository(Resource)
+            model_class = Resource
         else:
             click.echo(f"Unknown table: {table}", err=True)
             sys.exit(1)
@@ -304,9 +307,9 @@ async def _ingest_async(path: str, table: str, pattern: str, dry_run: bool):
                 tags = frontmatter.get("tags", []) if frontmatter else []
                 properties = frontmatter or {}
 
-                # Use repository upsert (handles embeddings automatically)
-                if isinstance(repo, OntologyRepository):
-                    await repo.upsert(
+                # Create model instance and upsert
+                if model_class == Ontology:
+                    record = Ontology(
                         name=entity_key,
                         description=content,
                         category=category,
@@ -314,7 +317,7 @@ async def _ingest_async(path: str, table: str, pattern: str, dry_run: bool):
                         properties=properties,
                     )
                 else:
-                    await repo.upsert(
+                    record = Resource(
                         name=entity_key,
                         content=content,
                         uri=f"file://{file_path.absolute()}",
@@ -322,6 +325,8 @@ async def _ingest_async(path: str, table: str, pattern: str, dry_run: bool):
                         tags=tags,
                         metadata=properties,
                     )
+
+                await repo.upsert(record)
 
                 processed += 1
                 click.echo(f"  ✓ {entity_key}")

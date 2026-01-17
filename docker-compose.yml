@@ -21,7 +21,7 @@ services:
   phoenix:
     image: arizephoenix/phoenix:latest
     ports:
-      - "6006:6006"   # Phoenix UI and HTTP OTLP collector
+      - "6016:6006"   # Phoenix UI and HTTP OTLP collector
     environment:
       - PHOENIX_WORKING_DIR=/phoenix
     volumes:

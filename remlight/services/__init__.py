@@ -6,14 +6,7 @@ from remlight.services.session import (
     session_to_pydantic_messages,
     audit_session_history,
 )
-from remlight.services.repository import (
-    Repository,
-    OntologyRepository,
-    ResourceRepository,
-    SessionRepository,
-    MessageRepository,
-    KVStoreRepository,
-)
+from remlight.services.repository import Repository, KVRepository
 from remlight.services.rem import RemQueryParser, RemService
 
 __all__ = [
@@ -23,11 +16,7 @@ __all__ = [
     "session_to_pydantic_messages",
     "audit_session_history",
     "Repository",
-    "OntologyRepository",
-    "ResourceRepository",
-    "SessionRepository",
-    "MessageRepository",
-    "KVStoreRepository",
+    "KVRepository",
     "RemQueryParser",
     "RemService",
 ]
