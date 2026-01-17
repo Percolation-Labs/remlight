@@ -145,8 +145,11 @@ See [schemas/](schemas/) for examples.
 | `POST /api/v1/chat/completions` | OpenAI-compatible chat with SSE |
 | `POST /api/v1/query` | Execute REM queries |
 | `GET /api/v1/agents` | List available agents |
+| `GET /api/v1/models` | List available LLM models |
 | `GET /api/v1/sessions` | List chat sessions |
 | `GET /api/v1/sessions/{id}/messages` | Get session messages |
+| `GET /api/v1/sessions/{id}/export` | Export session as YAML |
+| `GET/POST /api/v1/scenarios` | Scenario management for evals |
 
 ## Environment Variables
 

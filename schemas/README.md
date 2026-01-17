@@ -109,7 +109,7 @@ The agent can only call tools listed here. Tool implementations live in `remligh
 Evaluator agents are specialized for testing and validation. They use `structured_output: true` to return parseable results.
 
 ```yaml
-# evaluators/self-awareness-evaluator.yaml
+# schemas/evaluators/self-awareness-evaluator.yaml
 properties:
   overall_score:
     type: number

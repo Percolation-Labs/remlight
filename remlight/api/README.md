@@ -14,7 +14,11 @@ api/
     ├── __init__.py     # Router exports
     ├── chat.py         # OpenAI-compatible chat completions
     ├── query.py        # REM query endpoint
-    └── tools.py        # Tool functions (shared with MCP)
+    ├── tools.py        # Tool functions (shared with MCP)
+    ├── agents.py       # List available agent schemas
+    ├── sessions.py     # Session CRUD and message retrieval
+    ├── models.py       # List available LLM models
+    └── scenarios.py    # Scenario management and feedback
 ```
 
 ## Design Principles
@@ -56,9 +60,13 @@ result = await search("LOOKUP sarah-chen")
 |------|----------------|
 | `main.py` | FastAPI app, CORS, routing |
 | `mcp_main.py` | MCP server, tool registration |
-| `routers/tools.py` | Tool implementations |
-| `routers/chat.py` | OpenAI-compatible chat |
-| `routers/query.py` | Direct query execution |
+| `routers/tools.py` | Tool implementations (search, action, ask_agent) |
+| `routers/chat.py` | OpenAI-compatible chat completions |
+| `routers/query.py` | Direct REM query execution |
+| `routers/agents.py` | List and get agent schemas |
+| `routers/sessions.py` | Session CRUD and message retrieval |
+| `routers/models.py` | List available LLM models |
+| `routers/scenarios.py` | Scenario management and Phoenix feedback |
 
 ## Endpoints
 
@@ -70,6 +78,14 @@ result = await search("LOOKUP sarah-chen")
 | `/api/v1/chat/completions` | POST | OpenAI-compatible chat |
 | `/api/v1/query` | POST | REM query execution |
 | `/api/v1/tools/search` | POST | Search tool |
+| `/api/v1/agents` | GET | List available agent schemas |
+| `/api/v1/agents/{name}` | GET | Get specific agent |
+| `/api/v1/sessions` | GET | List user sessions |
+| `/api/v1/sessions/{id}/messages` | GET | Get session messages |
+| `/api/v1/sessions/{id}/export` | GET | Export session as YAML |
+| `/api/v1/models` | GET | List available LLM models |
+| `/api/v1/scenarios` | GET/POST | Scenario CRUD |
+| `/api/v1/scenarios/feedback` | POST | Phoenix feedback |
 | `/api/v1/mcp/*` | * | MCP HTTP endpoint |
 | `/docs` | GET | OpenAPI documentation |
 
