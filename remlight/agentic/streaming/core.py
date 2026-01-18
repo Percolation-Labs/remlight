@@ -495,6 +495,13 @@ async def _handle_model_request_node(
                         if event.part.content:
                             yield format_content_chunk(event.part.content, state)
 
+                    # ThinkingPart: Some models emit thinking content (treat as text)
+                    elif part_type == "ThinkingPart":
+                        if state.child_content_streamed:
+                            continue
+                        if event.part.content:
+                            yield format_content_chunk(event.part.content, state)
+
                     # ToolCallPart: LLM wants to call a tool
                     elif part_type == "ToolCallPart":
                         tool_name = event.part.tool_name
@@ -739,7 +746,7 @@ async def _handle_call_tools_node(
                             tool_id=tool_data.get("tool_id", "unknown"),
                             status="completed",
                             arguments=tool_data.get("arguments"),
-                            result=str(result_content)[:200] if result_content else None,
+                            result=result_content,
                         )
                     )
 

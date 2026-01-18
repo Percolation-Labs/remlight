@@ -4,6 +4,54 @@ A lightweight agentic framework built on [REM](https://github.com/mr-saoirse/rem
 
 Read the article: [A Really Simple Declarative Agent Framework (Part I)](https://medium.com/@mrsirsh/a-really-simply-declarative-agent-framework-part-i-6ae2b05fb2a1)
 
+## Quick Start
+
+```bash
+# 1. Install and start postgres
+pip install -e .
+docker compose up postgres -d
+
+# 2. Test with CLI (runs agent directly, no server needed)
+rem ask "What can you help me with?" --schema orchestrator-agent
+
+# 3. Or start the API server
+rem serve --port 8001
+
+# 4. Test with curl (in another terminal)
+curl -X POST http://localhost:8001/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "X-Session-Id: 6ba7b810-9dad-11d1-80b4-00c04fd430c8" \
+  -H "X-Agent-Schema: orchestrator-agent" \
+  -d '{"messages": [{"role": "user", "content": "What can you help me with?"}], "stream": false}'
+
+# 5. Load and query the knowledge base
+rem ingest ontology/
+rem query "LOOKUP architecture"
+rem query "SEARCH agents IN ontology"
+
+# 6. Start the chat client (in another terminal)
+cd app
+npm install
+VITE_API_BASE_URL=http://localhost:8001/api npm run dev
+# Open http://localhost:3000
+```
+
+**Headers:**
+
+| Header | Description |
+| ------ | ----------- |
+| `X-User-Id` | User identifier |
+| `X-Session-Id` | Session ID for multi-turn context (optional) |
+| `X-Agent-Schema` | Agent to use: `orchestrator-agent`, `query-agent`, `action-agent` |
+
+**Services:**
+
+- API: <http://localhost:8001>
+- API Docs: <http://localhost:8001/docs>
+
+---
+
 ## What is REMLight?
 
 REMLight adds agent orchestration on top of REM's memory primitives:
@@ -68,7 +116,7 @@ rem query "FUZZY streaming"
 ### 5. Start the API and Ask an Agent
 
 ```bash
-rem serve --port 8080
+rem serve --port 8001
 ```
 
 In another terminal:
@@ -85,7 +133,7 @@ REMLight includes a React chat client for testing agents interactively:
 ```bash
 cd app
 npm install
-VITE_API_BASE_URL=http://localhost:8080/api npm run dev
+VITE_API_BASE_URL=http://localhost:8001/api npm run dev
 ```
 
 Open http://localhost:3000

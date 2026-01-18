@@ -245,6 +245,33 @@ async def search(
                 "count": len(results),
             }
 
+        # SQL query
+        if query_upper.startswith("SQL"):
+            raw_sql = query[3:].strip()
+            # Safety check - only allow SELECT/WITH
+            sql_upper = raw_sql.upper().strip()
+            blocked = ("DROP", "DELETE", "TRUNCATE", "ALTER", "CREATE", "INSERT", "UPDATE")
+            if any(sql_upper.startswith(p) for p in blocked):
+                return {
+                    "status": "error",
+                    "error": "Blocked SQL operation. Only SELECT/WITH allowed.",
+                    "query": query,
+                }
+            if not (sql_upper.startswith("SELECT") or sql_upper.startswith("WITH")):
+                return {
+                    "status": "error",
+                    "error": "Only SELECT and WITH queries are allowed.",
+                    "query": query,
+                }
+            rows = await db.fetch(raw_sql)
+            return {
+                "status": "success",
+                "query_type": "SQL",
+                "raw_query": raw_sql,
+                "results": [dict(r) for r in rows],
+                "count": len(rows),
+            }
+
         # Default to fuzzy search
         results = await db.rem_fuzzy(query, user_id, 0.2, limit)
         return {
@@ -446,7 +473,24 @@ async def ask_agent(
                             if Agent.is_model_request_node(node):
                                 async with node.stream(agent_run.ctx) as request_stream:
                                     async for event in request_stream:
-                                        if hasattr(event, "delta") and hasattr(event.delta, "content_delta"):
+                                        event_type = type(event).__name__
+
+                                        # PartStartEvent: Beginning of a new part (text or thinking)
+                                        if event_type == "PartStartEvent":
+                                            if hasattr(event, "part"):
+                                                part_type = type(event.part).__name__
+                                                if part_type in ("TextPart", "ThinkingPart"):
+                                                    content = getattr(event.part, "content", None)
+                                                    if content:
+                                                        accumulated_content.append(content)
+                                                        await event_sink.put({
+                                                            "type": "child_content",
+                                                            "agent_name": agent_name,
+                                                            "content": content,
+                                                        })
+
+                                        # PartDeltaEvent: Incremental content
+                                        elif hasattr(event, "delta") and hasattr(event.delta, "content_delta"):
                                             content = event.delta.content_delta
                                             if content:
                                                 accumulated_content.append(content)
