@@ -78,7 +78,8 @@ async def process_child_event(
 
     if event_type == "child_tool_start":
         tool_name = f"{child_agent}:{child_event.get('tool_name', 'tool')}"
-        tool_id = f"call_{uuid.uuid4().hex[:8]}"
+        # Use pydantic-ai's tool_call_id if available, otherwise generate one
+        tool_id = child_event.get("tool_call_id") or f"call_{uuid.uuid4().hex[:8]}"
         arguments = child_event.get("arguments")
 
         # Normalize arguments
@@ -135,6 +136,8 @@ async def process_child_event(
 
     elif event_type == "child_tool_result":
         result = child_event.get("result")
+        tool_name = child_event.get("tool_name", "tool")
+        tool_call_id = child_event.get("tool_call_id") or f"call_{uuid.uuid4().hex[:8]}"
 
         # Check for action event from child
         if isinstance(result, dict) and result.get("_action_event"):
@@ -145,10 +148,10 @@ async def process_child_event(
         else:
             yield format_sse_event(
                 ToolCallEvent(
-                    tool_name=f"{child_agent}:tool",
-                    tool_id=f"call_{uuid.uuid4().hex[:8]}",
+                    tool_name=f"{child_agent}:{tool_name}",
+                    tool_id=tool_call_id,
                     status="completed",
-                    result=str(result)[:200] if result else None,
+                    result=result,
                 )
             )
 

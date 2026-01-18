@@ -516,18 +516,24 @@ async def ask_agent(
                                                 elif isinstance(raw_args, dict):
                                                     tool_args = raw_args
 
+                                            tool_call_id = getattr(tool_event.part, "tool_call_id", None) if hasattr(tool_event, "part") else None
                                             await event_sink.put({
                                                 "type": "child_tool_start",
                                                 "agent_name": agent_name,
                                                 "tool_name": tool_event.part.tool_name if hasattr(tool_event, "part") else "unknown",
+                                                "tool_call_id": tool_call_id,
                                                 "arguments": tool_args,
                                             })
 
                                         elif event_type == "FunctionToolResultEvent":
                                             result_content = tool_event.result.content if hasattr(tool_event.result, "content") else tool_event.result
+                                            tool_name = getattr(tool_event.result, "tool_name", "tool")
+                                            tool_call_id = getattr(tool_event.result, "tool_call_id", None)
                                             await event_sink.put({
                                                 "type": "child_tool_result",
                                                 "agent_name": agent_name,
+                                                "tool_name": tool_name,
+                                                "tool_call_id": tool_call_id,
                                                 "result": result_content,
                                             })
 
