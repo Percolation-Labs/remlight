@@ -263,7 +263,7 @@ RETURNS JSONB AS $$
 DECLARE
     result JSONB;
 BEGIN
-    SELECT data INTO result
+    SELECT data - 'embedding' INTO result
     FROM kv_store
     WHERE entity_key = p_key
       AND (p_user_id IS NULL OR user_id = p_user_id OR user_id IS NULL);
@@ -292,7 +292,7 @@ BEGIN
         RETURN QUERY
         SELECT o.id, o.name, o.description as content,
                1 - (o.embedding <=> p_query_embedding) as similarity,
-               to_jsonb(o) as data
+               to_jsonb(o) - 'embedding' as data
         FROM ontologies o
         WHERE o.embedding IS NOT NULL
           AND o.deleted_at IS NULL
@@ -304,7 +304,7 @@ BEGIN
         RETURN QUERY
         SELECT r.id, r.name, r.content,
                1 - (r.embedding <=> p_query_embedding) as similarity,
-               to_jsonb(r) as data
+               to_jsonb(r) - 'embedding' as data
         FROM resources r
         WHERE r.embedding IS NOT NULL
           AND r.deleted_at IS NULL
@@ -316,7 +316,7 @@ BEGIN
         RETURN QUERY
         SELECT m.id, NULL::VARCHAR(512) as name, m.content,
                1 - (m.embedding <=> p_query_embedding) as similarity,
-               to_jsonb(m) as data
+               to_jsonb(m) - 'embedding' as data
         FROM messages m
         WHERE m.embedding IS NOT NULL
           AND m.deleted_at IS NULL
@@ -328,7 +328,7 @@ BEGIN
         RETURN QUERY
         SELECT s.id, s.name, s.description as content,
                1 - (s.embedding <=> p_query_embedding) as similarity,
-               to_jsonb(s) as data
+               to_jsonb(s) - 'embedding' as data
         FROM scenarios s
         WHERE s.embedding IS NOT NULL
           AND s.deleted_at IS NULL
@@ -357,7 +357,7 @@ BEGIN
     RETURN QUERY
     SELECT k.entity_key, k.entity_type,
            similarity(k.entity_key, p_query_text)::DOUBLE PRECISION as sim,
-           k.data
+           k.data - 'embedding'
     FROM kv_store k
     WHERE similarity(k.entity_key, p_query_text) >= p_threshold
       AND (p_user_id IS NULL OR k.user_id = p_user_id OR k.user_id IS NULL)
@@ -387,7 +387,7 @@ WITH RECURSIVE traverse AS (
         k.entity_type,
         0 as depth,
         ARRAY[k.entity_key::TEXT] as path,
-        k.data
+        k.data - 'embedding' as data
     FROM kv_store k
     WHERE k.entity_key = p_entity_key
       AND (p_user_id IS NULL OR k.user_id = p_user_id OR k.user_id IS NULL)
@@ -400,9 +400,11 @@ WITH RECURSIVE traverse AS (
         k.entity_type,
         t.depth + 1,
         t.path || k.entity_key::TEXT,
-        k.data
+        k.data - 'embedding' as data
     FROM traverse t
-    CROSS JOIN LATERAL jsonb_array_elements(t.data->'graph_edges') as edge
+    CROSS JOIN LATERAL jsonb_array_elements(
+        (SELECT data FROM kv_store WHERE entity_key = t.entity_key)->'graph_edges'
+    ) as edge
     JOIN kv_store k ON k.entity_key = edge->>'target'
     WHERE t.depth < p_max_depth
       AND NOT k.entity_key::TEXT = ANY(t.path) -- Prevent cycles

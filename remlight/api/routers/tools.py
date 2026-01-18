@@ -146,7 +146,6 @@ def clear_metadata(request_id: str = "default") -> None:
 # Tool Functions (can be registered with MCP or called directly)
 # =============================================================================
 
-
 async def search(
     query: str,
     limit: int = 20,
