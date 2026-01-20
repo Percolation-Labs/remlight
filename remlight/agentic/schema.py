@@ -508,3 +508,96 @@ def build_agent_spec(
             "tools": [{"name": t} for t in tools],
         },
     }
+
+
+async def schema_from_database(
+    agent_name: str,
+    database_first: bool = False,
+) -> AgentSchema | None:
+    """
+    Load agent schema from database, optionally checking filesystem first.
+
+    This provides a unified way to load agent schemas from either source,
+    respecting the database_first preference.
+
+    Loading Order (default - database_first=False):
+    1. Check filesystem (schemas directory)
+    2. If not found, check database
+
+    Loading Order (database_first=True):
+    1. Check database
+    2. If not found, check filesystem
+
+    Args:
+        agent_name: The agent name (without .yaml extension)
+        database_first: If True, prefer database over filesystem
+
+    Returns:
+        AgentSchema if found, None otherwise
+
+    Example:
+        # Default: filesystem first
+        schema = await schema_from_database("my-agent")
+
+        # Database first
+        schema = await schema_from_database("my-agent", database_first=True)
+    """
+    from remlight.models.entities import Agent
+    from remlight.services.repository import Repository
+
+    # Lazy import to avoid circular dependencies
+    schemas_dir = Path(__file__).parent.parent.parent / "schemas"
+
+    file_schema = None
+    db_schema = None
+
+    # Try filesystem
+    yaml_file = schemas_dir / f"{agent_name}.yaml"
+    if yaml_file.exists():
+        try:
+            file_schema = schema_from_yaml_file(yaml_file)
+        except Exception:
+            pass
+
+    # Try database
+    try:
+        repo = Repository(Agent, table_name="agents")
+        db_agent = await repo.get_by_name(agent_name)
+        if db_agent and db_agent.enabled:
+            db_schema = schema_from_yaml(db_agent.content)
+    except Exception:
+        pass
+
+    # Apply precedence
+    if database_first:
+        return db_schema or file_schema
+    else:
+        return file_schema or db_schema
+
+
+def get_available_agents(schemas_dir: Path | None = None) -> list[str]:
+    """
+    Get list of available agent names from filesystem.
+
+    This is a synchronous helper for listing file-based agents.
+    For full listing including database agents, use the API endpoint.
+
+    Args:
+        schemas_dir: Optional path to schemas directory
+
+    Returns:
+        List of agent names (without .yaml extension)
+    """
+    if schemas_dir is None:
+        schemas_dir = Path(__file__).parent.parent.parent / "schemas"
+
+    agents = []
+    if schemas_dir.exists():
+        for yaml_file in schemas_dir.glob("*.yaml"):
+            try:
+                schema = schema_from_yaml_file(yaml_file)
+                agents.append(schema.json_schema_extra.name)
+            except Exception:
+                pass
+
+    return sorted(agents)

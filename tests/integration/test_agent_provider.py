@@ -18,7 +18,12 @@ import pytest
 from pydantic_ai import Agent
 from pydantic_ai.models.test import TestModel
 
-from remlight.agentic.provider import create_agent, AgentRuntime
+from remlight.agentic.provider import (
+    create_agent,
+    AgentRuntime,
+    clear_agent_cache,
+    get_agent_cache_stats,
+)
 from remlight.agentic.context import AgentContext
 from remlight.agentic.schema import AgentSchema
 
@@ -450,3 +455,247 @@ class TestAgentSchemaValidation:
 
         runtime = await create_agent(schema=schema, model_name="test")
         assert runtime.schema_name == "schema-object-agent"
+
+
+class TestAgentCache:
+    """Test agent caching functionality."""
+
+    @pytest.fixture(autouse=True)
+    async def clear_cache_before_test(self):
+        """Clear the agent cache before each test."""
+        await clear_agent_cache()
+        yield
+        await clear_agent_cache()
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_returns_same_agent(self):
+        """Test that same schema returns cached agent."""
+        schema = {
+            "type": "object",
+            "description": "Cacheable agent.",
+            "properties": {"answer": {"type": "string"}},
+            "json_schema_extra": {
+                "name": "cache-test-agent",
+                "tools": [],
+            },
+        }
+
+        # First call creates agent
+        runtime1 = await create_agent(schema=schema, model_name="test")
+        stats1 = get_agent_cache_stats()
+        assert stats1["size"] == 1
+
+        # Second call should return cached agent
+        runtime2 = await create_agent(schema=schema, model_name="test")
+        stats2 = get_agent_cache_stats()
+        assert stats2["size"] == 1  # Still 1, not 2
+
+        # Should be the exact same object
+        assert runtime1 is runtime2
+
+    @pytest.mark.asyncio
+    async def test_cache_miss_different_schema(self):
+        """Test that different schemas create different agents."""
+        schema1 = {
+            "type": "object",
+            "description": "Agent 1.",
+            "properties": {"answer": {"type": "string"}},
+            "json_schema_extra": {
+                "name": "cache-agent-1",
+                "tools": [],
+            },
+        }
+
+        schema2 = {
+            "type": "object",
+            "description": "Agent 2.",  # Different description
+            "properties": {"answer": {"type": "string"}},
+            "json_schema_extra": {
+                "name": "cache-agent-2",
+                "tools": [],
+            },
+        }
+
+        runtime1 = await create_agent(schema=schema1, model_name="test")
+        runtime2 = await create_agent(schema=schema2, model_name="test")
+
+        stats = get_agent_cache_stats()
+        assert stats["size"] == 2  # Two different agents cached
+
+        # Should be different objects
+        assert runtime1 is not runtime2
+
+    @pytest.mark.asyncio
+    async def test_cache_miss_different_model(self):
+        """Test that different models create different agents."""
+        schema = {
+            "type": "object",
+            "description": "Model test agent.",
+            "properties": {"answer": {"type": "string"}},
+            "json_schema_extra": {
+                "name": "model-cache-agent",
+                "tools": [],
+            },
+        }
+
+        runtime1 = await create_agent(schema=schema, model_name="test")
+        runtime2 = await create_agent(schema=schema, model_name="openai:gpt-4")
+
+        stats = get_agent_cache_stats()
+        assert stats["size"] == 2  # Different models = different cache entries
+
+    @pytest.mark.asyncio
+    async def test_cache_miss_different_user(self):
+        """Test that different users create different agents."""
+        schema = {
+            "type": "object",
+            "description": "User test agent.",
+            "properties": {"answer": {"type": "string"}},
+            "json_schema_extra": {
+                "name": "user-cache-agent",
+                "tools": [],
+            },
+        }
+
+        ctx1 = AgentContext(user_id="user-1")
+        ctx2 = AgentContext(user_id="user-2")
+
+        runtime1 = await create_agent(schema=schema, model_name="test", context=ctx1)
+        runtime2 = await create_agent(schema=schema, model_name="test", context=ctx2)
+
+        stats = get_agent_cache_stats()
+        assert stats["size"] == 2  # Different users = different cache entries
+
+    @pytest.mark.asyncio
+    async def test_cache_bypass_with_use_cache_false(self):
+        """Test that use_cache=False bypasses cache."""
+        schema = {
+            "type": "object",
+            "description": "Bypass test agent.",
+            "properties": {"answer": {"type": "string"}},
+            "json_schema_extra": {
+                "name": "bypass-cache-agent",
+                "tools": [],
+            },
+        }
+
+        runtime1 = await create_agent(schema=schema, model_name="test", use_cache=False)
+        runtime2 = await create_agent(schema=schema, model_name="test", use_cache=False)
+
+        stats = get_agent_cache_stats()
+        assert stats["size"] == 0  # Nothing cached
+
+        # Should be different objects
+        assert runtime1 is not runtime2
+
+    @pytest.mark.asyncio
+    async def test_cache_bypass_with_structured_output_override(self):
+        """Test that structured_output_override bypasses cache."""
+        schema = {
+            "type": "object",
+            "description": "Override test agent.",
+            "properties": {"answer": {"type": "string"}},
+            "json_schema_extra": {
+                "name": "override-cache-agent",
+                "tools": [],
+            },
+        }
+
+        # Override bypasses cache
+        runtime1 = await create_agent(
+            schema=schema, model_name="test", structured_output_override=True
+        )
+        runtime2 = await create_agent(
+            schema=schema, model_name="test", structured_output_override=True
+        )
+
+        stats = get_agent_cache_stats()
+        assert stats["size"] == 0  # Nothing cached when override is used
+
+    @pytest.mark.asyncio
+    async def test_clear_agent_cache_all(self):
+        """Test clearing entire cache."""
+        schema1 = {
+            "type": "object",
+            "description": "Clear test agent 1.",
+            "properties": {"answer": {"type": "string"}},
+            "json_schema_extra": {"name": "clear-agent-1", "tools": []},
+        }
+        schema2 = {
+            "type": "object",
+            "description": "Clear test agent 2.",
+            "properties": {"answer": {"type": "string"}},
+            "json_schema_extra": {"name": "clear-agent-2", "tools": []},
+        }
+
+        await create_agent(schema=schema1, model_name="test")
+        await create_agent(schema=schema2, model_name="test")
+
+        stats = get_agent_cache_stats()
+        assert stats["size"] == 2
+
+        count = await clear_agent_cache()
+        assert count == 2
+
+        stats_after = get_agent_cache_stats()
+        assert stats_after["size"] == 0
+
+    @pytest.mark.asyncio
+    async def test_cache_stats(self):
+        """Test get_agent_cache_stats returns correct info."""
+        schema = {
+            "type": "object",
+            "description": "Stats test agent.",
+            "properties": {"answer": {"type": "string"}},
+            "json_schema_extra": {"name": "stats-agent", "tools": []},
+        }
+
+        await create_agent(schema=schema, model_name="test")
+
+        stats = get_agent_cache_stats()
+        assert "size" in stats
+        assert "max_size" in stats
+        assert "ttl_seconds" in stats
+        assert "keys" in stats
+        assert stats["size"] == 1
+        assert stats["max_size"] == 50
+        assert stats["ttl_seconds"] == 300
+        assert len(stats["keys"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_cache_performance_improvement(self):
+        """Test that cache improves performance for repeated agent creation."""
+        import time
+
+        schema = {
+            "type": "object",
+            "description": "Performance test agent with a longer description to make parsing slightly slower.",
+            "properties": {
+                "answer": {"type": "string"},
+                "confidence": {"type": "number"},
+                "sources": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["answer"],
+            "json_schema_extra": {
+                "name": "perf-test-agent",
+                "tools": [],
+            },
+        }
+
+        # First call - cold
+        start = time.perf_counter()
+        await create_agent(schema=schema, model_name="test")
+        cold_time = time.perf_counter() - start
+
+        # Subsequent calls - warm (from cache)
+        warm_times = []
+        for _ in range(5):
+            start = time.perf_counter()
+            await create_agent(schema=schema, model_name="test")
+            warm_times.append(time.perf_counter() - start)
+
+        avg_warm_time = sum(warm_times) / len(warm_times)
+
+        # Cache hits should be faster than cold creation
+        # (Though with simple test schemas, the difference may be small)
+        assert avg_warm_time <= cold_time, f"Cache should be faster: cold={cold_time:.6f}s, avg_warm={avg_warm_time:.6f}s"

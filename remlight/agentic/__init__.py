@@ -12,7 +12,12 @@ Streaming:
 """
 
 from remlight.agentic.schema import AgentSchema, schema_from_yaml, schema_from_yaml_file, schema_to_yaml
-from remlight.agentic.provider import create_agent, AgentRuntime
+from remlight.agentic.provider import (
+    create_agent,
+    AgentRuntime,
+    clear_agent_cache,
+    get_agent_cache_stats,
+)
 from remlight.agentic.context import (
     AgentContext,
     get_current_context,
@@ -48,6 +53,9 @@ __all__ = [
     # Agent factory
     "create_agent",
     "AgentRuntime",
+    # Agent cache
+    "clear_agent_cache",
+    "get_agent_cache_stats",
     # Context
     "AgentContext",
     "get_current_context",

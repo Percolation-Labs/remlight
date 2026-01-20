@@ -28,9 +28,11 @@ CREATE INDEX IF NOT EXISTS kv_store_entity_type_idx ON kv_store(entity_type);
 CREATE TABLE IF NOT EXISTS ontologies (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(512) NOT NULL,
-    description TEXT,
+    content TEXT,  -- Full markdown content
+    description TEXT,  -- Short description for search
     category VARCHAR(256),
     entity_type VARCHAR(128),
+    uri VARCHAR(1024),  -- Source file URI
     properties JSONB DEFAULT '{}',
     graph_edges JSONB DEFAULT '[]',
     metadata JSONB DEFAULT '{}',
@@ -162,6 +164,78 @@ CREATE INDEX IF NOT EXISTS scenarios_created_at_idx ON scenarios(created_at);
 CREATE INDEX IF NOT EXISTS scenarios_embedding_idx ON scenarios USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX IF NOT EXISTS scenarios_name_trgm_idx ON scenarios USING GIN (name gin_trgm_ops);
 
+-- Agents (stored agent schemas from database)
+CREATE TABLE IF NOT EXISTS agents (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(512) NOT NULL UNIQUE,  -- Unique constraint for ON CONFLICT
+    description TEXT,  -- Used for semantic search (first line = title)
+    content TEXT NOT NULL,  -- Full YAML content
+    version VARCHAR(64) DEFAULT '1.0.0',
+    enabled BOOLEAN DEFAULT TRUE,
+    graph_edges JSONB DEFAULT '[]',
+    metadata JSONB DEFAULT '{}',
+    tags TEXT[] DEFAULT '{}',
+    embedding VECTOR(1536),
+    user_id VARCHAR(256),
+    tenant_id VARCHAR(256),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    deleted_at TIMESTAMP WITH TIME ZONE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS agents_name_unique ON agents(name) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS agents_user_id_idx ON agents(user_id);
+CREATE INDEX IF NOT EXISTS agents_enabled_idx ON agents(enabled);
+CREATE INDEX IF NOT EXISTS agents_tags_idx ON agents USING GIN (tags);
+CREATE INDEX IF NOT EXISTS agents_embedding_idx ON agents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS agents_name_trgm_idx ON agents USING GIN (name gin_trgm_ops);
+
+-- Files (uploaded/processed files with parsed output)
+-- Uses URI hash as deterministic ID for upsert-by-URI pattern
+CREATE TABLE IF NOT EXISTS files (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(512) NOT NULL,  -- Original filename
+    uri VARCHAR(2048) NOT NULL,  -- Source URI (s3://, file://, https://)
+    uri_hash VARCHAR(64) NOT NULL,  -- SHA256 hash of URI for deduplication
+    content TEXT,  -- Extracted text content
+    mime_type VARCHAR(256),  -- MIME type (application/pdf, text/markdown, etc.)
+    size_bytes BIGINT,  -- File size in bytes
+    processing_status VARCHAR(64) DEFAULT 'pending',  -- pending, processing, completed, failed
+    parsed_output JSONB DEFAULT '{}',  -- Rich parsing result (text, tables, images, metadata)
+    graph_edges JSONB DEFAULT '[]',
+    metadata JSONB DEFAULT '{}',
+    tags TEXT[] DEFAULT '{}',
+    user_id VARCHAR(256),
+    tenant_id VARCHAR(256),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    deleted_at TIMESTAMP WITH TIME ZONE
+);
+-- Note: Using regular UNIQUE constraint (not partial index) to support ON CONFLICT upsert
+ALTER TABLE files ADD CONSTRAINT files_uri_hash_unique UNIQUE (uri_hash);
+CREATE INDEX IF NOT EXISTS files_user_id_idx ON files(user_id);
+CREATE INDEX IF NOT EXISTS files_processing_status_idx ON files(processing_status);
+CREATE INDEX IF NOT EXISTS files_mime_type_idx ON files(mime_type);
+CREATE INDEX IF NOT EXISTS files_name_trgm_idx ON files USING GIN (name gin_trgm_ops);
+
+-- Agent Time Machine (version history for agents)
+-- Note: No FK constraint on agent_id because we need to preserve history after agent deletion
+CREATE TABLE IF NOT EXISTS agent_timemachine (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id UUID NOT NULL,  -- Reference to agents.id (no FK - preserves history after deletion)
+    agent_name VARCHAR(512) NOT NULL,
+    content TEXT NOT NULL,  -- Full YAML content at this version
+    version VARCHAR(64),
+    content_hash VARCHAR(64) NOT NULL,  -- SHA256 hash for change detection
+    change_type VARCHAR(64) NOT NULL,  -- 'created', 'updated', 'deleted'
+    metadata JSONB DEFAULT '{}',
+    user_id VARCHAR(256),
+    tenant_id VARCHAR(256),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS agent_timemachine_agent_id_idx ON agent_timemachine(agent_id);
+CREATE INDEX IF NOT EXISTS agent_timemachine_agent_name_idx ON agent_timemachine(agent_name);
+CREATE INDEX IF NOT EXISTS agent_timemachine_created_at_idx ON agent_timemachine(created_at DESC);
+
 -- ============================================
 -- TRIGGERS: Auto-update KV Store
 -- ============================================
@@ -216,6 +290,12 @@ CREATE TRIGGER scenario_kv_trigger
 AFTER INSERT OR UPDATE ON scenarios
 FOR EACH ROW EXECUTE FUNCTION update_kv_store();
 
+-- Trigger for agents
+DROP TRIGGER IF EXISTS agent_kv_trigger ON agents;
+CREATE TRIGGER agent_kv_trigger
+AFTER INSERT OR UPDATE ON agents
+FOR EACH ROW EXECUTE FUNCTION update_kv_store();
+
 -- Auto-update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
@@ -246,9 +326,77 @@ DROP TRIGGER IF EXISTS scenarios_updated_at ON scenarios;
 CREATE TRIGGER scenarios_updated_at BEFORE UPDATE ON scenarios
 FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+DROP TRIGGER IF EXISTS agents_updated_at ON agents;
+CREATE TRIGGER agents_updated_at BEFORE UPDATE ON agents
+FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
 DROP TRIGGER IF EXISTS kv_store_updated_at ON kv_store;
 CREATE TRIGGER kv_store_updated_at BEFORE UPDATE ON kv_store
 FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS files_updated_at ON files;
+CREATE TRIGGER files_updated_at BEFORE UPDATE ON files
+FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============================================
+-- AGENT TIME MACHINE TRIGGER
+-- ============================================
+-- Records version history when agents are created, updated, or deleted
+-- Only creates a new entry if the content has actually changed (via hash)
+
+CREATE OR REPLACE FUNCTION record_agent_timemachine()
+RETURNS TRIGGER AS $$
+DECLARE
+    new_hash VARCHAR(64);
+    old_hash VARCHAR(64);
+BEGIN
+    -- Calculate hash of new content
+    IF TG_OP = 'DELETE' THEN
+        -- Record deletion
+        INSERT INTO agent_timemachine (
+            agent_id, agent_name, content, version, content_hash, change_type,
+            metadata, user_id, tenant_id
+        ) VALUES (
+            OLD.id, OLD.name, OLD.content, OLD.version,
+            encode(sha256(OLD.content::bytea), 'hex'),
+            'deleted', OLD.metadata, OLD.user_id, OLD.tenant_id
+        );
+        RETURN OLD;
+    END IF;
+
+    new_hash := encode(sha256(NEW.content::bytea), 'hex');
+
+    IF TG_OP = 'INSERT' THEN
+        -- Record creation
+        INSERT INTO agent_timemachine (
+            agent_id, agent_name, content, version, content_hash, change_type,
+            metadata, user_id, tenant_id
+        ) VALUES (
+            NEW.id, NEW.name, NEW.content, NEW.version, new_hash,
+            'created', NEW.metadata, NEW.user_id, NEW.tenant_id
+        );
+    ELSIF TG_OP = 'UPDATE' THEN
+        -- Only record if content actually changed
+        old_hash := encode(sha256(OLD.content::bytea), 'hex');
+        IF new_hash != old_hash THEN
+            INSERT INTO agent_timemachine (
+                agent_id, agent_name, content, version, content_hash, change_type,
+                metadata, user_id, tenant_id
+            ) VALUES (
+                NEW.id, NEW.name, NEW.content, NEW.version, new_hash,
+                'updated', NEW.metadata, NEW.user_id, NEW.tenant_id
+            );
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS agent_timemachine_trigger ON agents;
+CREATE TRIGGER agent_timemachine_trigger
+AFTER INSERT OR UPDATE OR DELETE ON agents
+FOR EACH ROW EXECUTE FUNCTION record_agent_timemachine();
 
 -- ============================================
 -- REM FUNCTIONS
@@ -290,7 +438,7 @@ RETURNS TABLE (
 BEGIN
     IF p_table_name = 'ontologies' THEN
         RETURN QUERY
-        SELECT o.id, o.name, o.description as content,
+        SELECT o.id, o.name, COALESCE(o.description, o.content) as content,
                1 - (o.embedding <=> p_query_embedding) as similarity,
                to_jsonb(o) - 'embedding' as data
         FROM ontologies o
@@ -335,6 +483,19 @@ BEGIN
           AND (p_user_id IS NULL OR s.user_id = p_user_id OR s.user_id IS NULL)
           AND 1 - (s.embedding <=> p_query_embedding) >= p_min_similarity
         ORDER BY s.embedding <=> p_query_embedding
+        LIMIT p_limit;
+    ELSIF p_table_name = 'agents' THEN
+        RETURN QUERY
+        SELECT a.id, a.name, a.description as content,
+               1 - (a.embedding <=> p_query_embedding) as similarity,
+               to_jsonb(a) - 'embedding' as data
+        FROM agents a
+        WHERE a.embedding IS NOT NULL
+          AND a.deleted_at IS NULL
+          AND a.enabled = TRUE
+          AND (p_user_id IS NULL OR a.user_id = p_user_id OR a.user_id IS NULL)
+          AND 1 - (a.embedding <=> p_query_embedding) >= p_min_similarity
+        ORDER BY a.embedding <=> p_query_embedding
         LIMIT p_limit;
     END IF;
 END;
@@ -434,9 +595,10 @@ CREATE INDEX IF NOT EXISTS embedding_queue_status_idx ON embedding_queue(status)
 CREATE OR REPLACE FUNCTION queue_ontology_embedding()
 RETURNS TRIGGER AS $$
 BEGIN
-    IF NEW.embedding IS NULL AND NEW.description IS NOT NULL THEN
+    -- Use description if available, otherwise fall back to content
+    IF NEW.embedding IS NULL AND (NEW.description IS NOT NULL OR NEW.content IS NOT NULL) THEN
         INSERT INTO embedding_queue (table_name, record_id, content)
-        VALUES ('ontologies', NEW.id, COALESCE(NEW.name || ': ', '') || NEW.description);
+        VALUES ('ontologies', NEW.id, COALESCE(NEW.name || ': ', '') || COALESCE(NEW.description, NEW.content));
     END IF;
     RETURN NEW;
 END;
@@ -466,7 +628,7 @@ $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS ontologies_embedding_queue ON ontologies;
 CREATE TRIGGER ontologies_embedding_queue
-AFTER INSERT OR UPDATE OF description ON ontologies
+AFTER INSERT OR UPDATE OF description, content ON ontologies
 FOR EACH ROW EXECUTE FUNCTION queue_ontology_embedding();
 
 DROP TRIGGER IF EXISTS resources_embedding_queue ON resources;
@@ -495,6 +657,24 @@ DROP TRIGGER IF EXISTS scenarios_embedding_queue ON scenarios;
 CREATE TRIGGER scenarios_embedding_queue
 AFTER INSERT OR UPDATE OF description ON scenarios
 FOR EACH ROW EXECUTE FUNCTION queue_scenario_embedding();
+
+-- Agent embedding queue
+-- Uses description if provided, otherwise falls back to content for embedding
+CREATE OR REPLACE FUNCTION queue_agent_embedding()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.embedding IS NULL AND (NEW.description IS NOT NULL OR NEW.content IS NOT NULL) THEN
+        INSERT INTO embedding_queue (table_name, record_id, content)
+        VALUES ('agents', NEW.id, COALESCE(NEW.name || ': ', '') || COALESCE(NEW.description, NEW.content));
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS agents_embedding_queue ON agents;
+CREATE TRIGGER agents_embedding_queue
+AFTER INSERT OR UPDATE OF description, content ON agents
+FOR EACH ROW EXECUTE FUNCTION queue_agent_embedding();
 
 -- ============================================
 -- DONE

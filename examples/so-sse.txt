@@ -1,0 +1,33 @@
+# REAL SSE EVENT - Structured Output Agent
+# This shows the tool_call event emitted when a structured output agent completes
+#
+# Emitted by ask_agent (tools.py lines 587-597) when is_pydantic_model(result.output) == True
+
+# The key SSE event for structured output:
+event: tool_call
+data: {"type": "tool_call", "tool_name": "test_structured_output", "tool_id": "test_structured_output_structured_output", "status": "completed", "arguments": {"input_text": "I love this product!"}, "result": {"result": {"summary": "Positive sentiment", "sentiment": "positive", "keywords": ["love", "product"]}}}
+
+# Formatted for readability:
+# {
+#   "type": "tool_call",
+#   "tool_name": "test_structured_output",        <- Agent name
+#   "tool_id": "test_structured_output_structured_output",  <- {agent_name}_structured_output
+#   "status": "completed",
+#   "arguments": {
+#     "input_text": "I love this product!"        <- What was sent TO the agent
+#   },
+#   "result": {                                   <- The structured output (Pydantic model serialized)
+#     "result": {
+#       "summary": "Positive sentiment",
+#       "sentiment": "positive",
+#       "keywords": ["love", "product"]
+#     }
+#   }
+# }
+
+# KEY POINTS:
+# 1. event type is "tool_call" (same as regular tool calls)
+# 2. tool_name is the AGENT NAME (not "ask_agent")
+# 3. tool_id has "_structured_output" suffix
+# 4. result contains the serialized Pydantic model
+# 5. This allows frontend to render structured data as cards/forms

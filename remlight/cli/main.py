@@ -468,6 +468,64 @@ async def _eval_async(
 
 
 @cli.command()
+@click.argument("uri", type=str)
+@click.option("--user-id", "-u", help="User ID for scoping")
+@click.option("--save/--no-save", default=True, help="Save to database (default: yes)")
+@click.option("--output", "-o", type=click.Choice(["json", "text"]), default="json", help="Output format")
+def parse(uri: str, user_id: str | None, save: bool, output: str):
+    """
+    Parse a file and extract content.
+
+    Supports local files, file:// URIs, and s3:// URIs.
+    Uses Kreuzberg for document parsing (PDF, DOCX, PPTX, XLSX, images).
+
+    Examples:
+        rem parse document.pdf
+        rem parse s3://bucket/file.docx --user-id user-123
+        rem parse ./README.md --output text --no-save
+    """
+    asyncio.run(_parse_async(uri, user_id, save, output))
+
+
+async def _parse_async(uri: str, user_id: str | None, save: bool, output: str):
+    """Async implementation of parse command."""
+    import json
+
+    from remlight.services.content import get_content_service
+
+    service = get_content_service()
+
+    try:
+        result = await service.parse_file(
+            uri=uri,
+            user_id=user_id,
+            save_to_db=save,
+        )
+
+        if output == "json":
+            # Remove content from output for cleaner JSON (it's in parsed_output)
+            output_data = {k: v for k, v in result.items() if k != "content"}
+            click.echo(json.dumps(output_data, indent=2, default=str))
+        else:
+            # Text output - just the extracted content
+            click.echo(result.get("content", result.get("error", "No content")))
+
+        if result.get("status") == "completed":
+            if save:
+                click.echo(f"\nFile saved: {result.get('name')} (id={result.get('file_id')})", err=True)
+        else:
+            click.echo(f"\nError: {result.get('error')}", err=True)
+            sys.exit(1)
+
+    except FileNotFoundError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
 def install():
     """Install database schema (tables, triggers, functions)."""
     asyncio.run(_install_async())

@@ -352,6 +352,7 @@ async def ask_agent(
     input_data: dict[str, Any] | None = None,
     user_id: str | None = None,
     timeout_seconds: int = 300,
+    structured_output_override: bool | None = None,
 ) -> dict[str, Any]:
     """
     Invoke another agent by name and return its response.
@@ -365,9 +366,12 @@ async def ask_agent(
         input_data: Optional structured input data for the agent
         user_id: Optional user override (defaults to parent's user_id)
         timeout_seconds: Maximum execution time (default: 300s)
+        structured_output_override: Optional override for structured_output mode.
+            When provided, overrides the agent schema's structured_output setting.
+            Only set this if intentional - often better to let the agent schema decide.
 
     Returns:
-        Dict with status, output, text_response, and agent_schema
+        Dict with status, output, text_response, agent_schema, and is_structured_output
     """
     from remlight.agentic import create_agent
     from remlight.agentic.context import (
@@ -419,6 +423,7 @@ async def ask_agent(
         model_name=child_context.default_model,
         tools=tools,
         context=child_context,
+        structured_output_override=structured_output_override,
     )
 
     # Load session history for context continuity
@@ -565,15 +570,66 @@ async def ask_agent(
             "agent_schema": agent_name,
         }
 
-    output = result.output if hasattr(result, "output") else result
-    if hasattr(output, "model_dump"):
-        output = output.model_dump()
+    # Import serialization utilities
+    from remlight.agentic.serialization import serialize_agent_result, is_pydantic_model
+
+    raw_output = result.output if hasattr(result, "output") else result
+
+    # Detect if this is structured output (Pydantic model)
+    is_structured_output = is_pydantic_model(raw_output)
+
+    # Serialize output for response
+    output = serialize_agent_result(raw_output)
+
+    # Structured output tool ID for events and DB storage
+    structured_tool_id = f"{agent_name}_structured_output"
+
+    # If child agent returned structured output, emit as tool_call SSE event
+    # This allows the frontend to render structured results (forms, cards, etc.)
+    if use_streaming and is_structured_output and event_sink is not None:
+        await event_sink.put({
+            "type": "tool_call",
+            "tool_name": agent_name,  # Use agent name as tool name for clarity
+            "tool_id": structured_tool_id,
+            "status": "completed",
+            "arguments": {"input_text": input_text},
+            "result": output,  # Serialized Pydantic model as dict
+        })
+
+    # Save structured output as a tool message in the database
+    # This makes structured output agents look like tool calls in session history
+    if is_structured_output and child_context and child_context.session_id:
+        try:
+            from remlight.services.session import SessionMessageStore
+
+            store = SessionMessageStore(user_id=child_context.user_id or "default")
+
+            # Build tool message in the same format as regular tool calls
+            tool_message = {
+                "role": "tool",
+                "content": json.dumps(output, default=str),  # Structured output as JSON
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "tool_call_id": structured_tool_id,
+                "tool_name": agent_name,  # Agent name as tool name
+                "tool_arguments": {"input_text": input_text},
+            }
+
+            # Store as a single message
+            await store.store_session_messages(
+                session_id=child_context.session_id,
+                messages=[tool_message],
+                user_id=child_context.user_id,
+                compress=False,  # Don't compress tool results
+            )
+        except Exception:
+            pass  # Best-effort, don't fail the request
 
     response = {
         "status": "success",
         "output": output,
         "agent_schema": agent_name,
         "input_text": input_text,
+        "is_structured_output": is_structured_output,  # Flag for caller to know result type
     }
 
     # IMPORTANT: Only include text_response if content was NOT streamed.
@@ -591,6 +647,73 @@ async def ask_agent(
 # =============================================================================
 
 
+async def parse_file(
+    uri: str,
+    user_id: str | None = None,
+    save_to_db: bool = True,
+) -> dict[str, Any]:
+    """
+    Parse a file and extract content.
+
+    Reads files from local filesystem or S3 and extracts text content.
+    Uses Kreuzberg for document parsing (PDF, DOCX, PPTX, XLSX, images).
+    Saves the parsed result to the files table with rich metadata.
+
+    Supported formats:
+    - Documents: PDF, DOCX, PPTX, XLSX (via Kreuzberg with OCR fallback)
+    - Images: PNG, JPG, GIF, WEBP (OCR text extraction)
+    - Text: Markdown, JSON, YAML, code files (UTF-8 extraction)
+
+    Args:
+        uri: File URI - local path, file:// URI, or s3:// URI
+        user_id: Optional user ID for scoping
+        save_to_db: Whether to save File entity to database (default: True)
+
+    Returns:
+        Dict with:
+            - file_id: UUID of saved File entity
+            - uri: Original URI
+            - uri_hash: SHA256 hash of URI for deduplication
+            - name: Filename
+            - content: Extracted text content
+            - parsed_output: Full parsing result with metadata
+            - status: 'completed' or 'failed'
+
+    Examples:
+        parse_file("./document.pdf")
+        parse_file("s3://bucket/file.docx", user_id="user-123")
+        parse_file("/path/to/image.png", save_to_db=False)
+    """
+    from remlight.services.content import get_content_service
+
+    service = get_content_service()
+
+    try:
+        result = await service.parse_file(
+            uri=uri,
+            user_id=user_id,
+            save_to_db=save_to_db,
+        )
+        return result
+    except FileNotFoundError as e:
+        return {
+            "status": "error",
+            "error": f"File not found: {e}",
+            "uri": uri,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "uri": uri,
+        }
+
+
+# =============================================================================
+# REST API Endpoints (wrap tool functions for HTTP access)
+# =============================================================================
+
+
 @router.post("/search")
 async def search_endpoint(
     query: str,
@@ -599,3 +722,13 @@ async def search_endpoint(
 ) -> dict[str, Any]:
     """REST endpoint for search tool."""
     return await search(query=query, limit=limit, user_id=user_id)
+
+
+@router.post("/parse-file")
+async def parse_file_endpoint(
+    uri: str,
+    user_id: str | None = None,
+    save_to_db: bool = True,
+) -> dict[str, Any]:
+    """REST endpoint for parse_file tool."""
+    return await parse_file(uri=uri, user_id=user_id, save_to_db=save_to_db)

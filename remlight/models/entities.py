@@ -26,6 +26,9 @@ class Ontology(CoreModel):
     uri: str | None = None  # Source file URI
     properties: dict[str, Any] = Field(default_factory=dict)  # Frontmatter metadata
 
+    # Embeddings: uses default precedence (description → content)
+    model_config = {"embedding_field": True}
+
     @field_validator("properties", mode="before")
     @classmethod
     def parse_properties(cls, v: Any) -> Any:
@@ -46,6 +49,9 @@ class Resource(CoreModel):
     content: str | None = None
     category: str | None = None
     related_entities: list[dict[str, Any]] = Field(default_factory=list)
+
+    # Embeddings: specify content since no description field
+    model_config = {"embedding_field": "content"}
 
     @field_validator("related_entities", mode="before")
     @classmethod
@@ -135,3 +141,81 @@ class Scenario(CoreModel):
     session_id: UUID | str | None = None  # Link to the session
     agent_name: str | None = None  # Agent used in this scenario
     status: str = "active"  # active, archived, completed
+
+
+class Agent(CoreModel):
+    """Stored agent schema from database.
+
+    Agents can be defined in YAML files (schemas directory) or stored in the database.
+    Database agents allow runtime creation and modification without code changes.
+
+    The 'content' field stores the full YAML schema that can be loaded
+    via schema_from_yaml() to create an AgentSchema instance.
+
+    The 'description' field is used for semantic search embeddings. If not provided,
+    embeddings are generated from 'content' as fallback.
+
+    Time Machine: When agents are upserted, a trigger automatically records
+    version history in agent_timemachine table if content changes.
+    """
+
+    name: str  # Unique agent identifier (matches json_schema_extra.name)
+    description: str | None = None  # Optional short description for search
+    content: str  # Full YAML content - source of truth
+    version: str = "1.0.0"  # Schema version
+    enabled: bool = True  # Whether agent is active
+
+    # Embeddings: uses default precedence (description → content)
+    model_config = {"embedding_field": True}
+
+
+class AgentTimeMachine(CoreModel):
+    """Version history entry for an agent.
+
+    Automatically populated by database trigger when agents change.
+    Records the full content at each version for audit and rollback.
+    """
+
+    agent_id: UUID | str  # Reference to agents.id
+    agent_name: str  # Agent name at time of change
+    content: str  # Full YAML content at this version
+    version: str | None = None  # Version at time of change
+    content_hash: str  # SHA256 hash for change detection
+    change_type: str  # 'created', 'updated', 'deleted'
+
+
+class File(CoreModel):
+    """File metadata and parsed content.
+
+    Files represent uploaded or processed documents (PDFs, images, audio, etc.)
+    with their extracted content stored in parsed_output.
+
+    Attributes:
+        name: Original filename
+        uri: Source URI (s3://, file://, https://)
+        uri_hash: SHA256 hash of URI for deduplication
+        content: Extracted text content
+        mime_type: MIME type (application/pdf, text/markdown, etc.)
+        size_bytes: File size in bytes
+        processing_status: pending, processing, completed, failed
+        parsed_output: Rich parsing result with text, tables, images, metadata
+    """
+
+    name: str
+    uri: str
+    uri_hash: str | None = None  # Computed from URI if not provided
+    content: str | None = None
+    mime_type: str | None = None
+    size_bytes: int | None = None
+    processing_status: str = "pending"
+    parsed_output: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("parsed_output", mode="before")
+    @classmethod
+    def parse_parsed_output(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return {}
+        return v

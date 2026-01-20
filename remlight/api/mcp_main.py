@@ -24,6 +24,7 @@ from remlight.api.routers.tools import (
     search,
     action,
     ask_agent,
+    parse_file,
     init_tools,
     get_user_profile,
     format_user_profile,
@@ -74,6 +75,7 @@ Tables: ontologies, resources, users, messages, sessions
     mcp.tool(name="search")(search)
     mcp.tool(name="action")(action)
     mcp.tool(name="ask_agent")(ask_agent)
+    mcp.tool(name="parse_file")(parse_file)
 
     # Register MCP resources
     _register_resources(mcp)
@@ -118,6 +120,7 @@ def _register_resources(mcp: FastMCP) -> None:
 - search: Execute REM queries
 - action: Emit typed action events (observation, elicit, delegate)
 - ask_agent: Multi-agent orchestration
+- parse_file: Parse files and extract content (PDF, DOCX, images, text)
 """
 
 

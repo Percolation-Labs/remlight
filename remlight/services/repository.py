@@ -50,9 +50,10 @@ KEY DESIGN DECISIONS
    - Ontology → ontologys (override to "ontology" if needed)
    - Session → sessions
 
-3. **Automatic Embedding Generation**:
-   Fields named "content" or "description" automatically get embeddings
-   generated via the embedding service. This enables semantic search.
+3. **Model-Driven Embedding Generation**:
+   Models that have an 'embedding' field will automatically get embeddings
+   generated. The source field is determined by model_config['embedding_field']
+   with fallback to 'description' then 'content'. This enables semantic search.
 
 4. **Upsert as Primary Operation**:
    We use upsert (INSERT ON CONFLICT UPDATE) instead of separate create/update.
@@ -110,9 +111,9 @@ from remlight.services.sql_builder import (
 # This enables type inference: Repository[Message].find() returns list[Message]
 T = TypeVar("T", bound=BaseModel)
 
-# Fields that trigger automatic embedding generation for semantic search
-# When upserting a record with these fields, we generate vector embeddings
-EMBEDDABLE_FIELDS = {"content", "description"}
+# Default fields to check for embedding content (in priority order)
+# Used when model doesn't specify embedding_field in model_config
+DEFAULT_EMBEDDING_FIELDS = ["description", "content"]
 
 
 def _get_db():
@@ -251,11 +252,22 @@ class Repository(Generic[T]):
 
         This simplifies client code - no need for separate batch methods.
 
-        AUTOMATIC EMBEDDING GENERATION
-        -----------------------------
-        When generate_embeddings=True (default), checks for EMBEDDABLE_FIELDS
-        ("content", "description") and generates vector embeddings for semantic
-        search. The embedding is stored in the 'embedding' column (pgvector).
+        MODEL-DRIVEN EMBEDDING GENERATION
+        ----------------------------------
+        When generate_embeddings=True (default), embeddings are generated ONLY
+        if the model has 'embedding_field' in model_config. Models without this
+        config are not affected (backward compatible).
+
+        Config options:
+        - embedding_field: True → use default precedence (description → content)
+        - embedding_field: "fieldname" → use that field, fallback to defaults
+
+        Example models:
+            class Ontology(CoreModel):
+                model_config = {"embedding_field": True}  # description → content
+
+            class Resource(CoreModel):
+                model_config = {"embedding_field": "content"}  # content only
 
         This enables the SEARCH REM query operation:
             REM SEARCH "machine learning" IN ontology
@@ -269,8 +281,8 @@ class Repository(Generic[T]):
 
         Args:
             records: Single model instance or list of instances
-            generate_embeddings: If True, generate vector embeddings for
-                                searchable fields (content, description)
+            generate_embeddings: If True, generate vector embeddings for models
+                                that have an 'embedding' field defined
             conflict_field: Field to detect conflicts (default: "id")
 
         Returns:
@@ -285,23 +297,39 @@ class Repository(Generic[T]):
 
         for record in records_list:
             # =================================================================
-            # EMBEDDING GENERATION
+            # EMBEDDING GENERATION (Model-Driven)
             # =================================================================
-            # Check for embeddable fields (content, description) and generate
-            # vector embeddings for semantic search capability.
+            # Only generate embeddings if:
+            # 1. generate_embeddings=True (default)
+            # 2. The model has an 'embedding' field defined
             #
-            # Only the FIRST embeddable field found is used (to avoid redundancy)
+            # Source field priority:
+            # 1. model_config['embedding_field'] if specified
+            # 2. Fallback: 'description' then 'content'
             # =================================================================
             embedding = None
             if generate_embeddings:
-                for field_name in EMBEDDABLE_FIELDS:
-                    content = getattr(record, field_name, None)
-                    if content and isinstance(content, str):
-                        logger.debug(f"Generating embedding for {field_name}")
-                        embedding_list = await generate_embedding_async(content)
-                        # Format as PostgreSQL array literal for pgvector
-                        embedding = "[" + ",".join(str(x) for x in embedding_list) + "]"
-                        break  # Use first embeddable field found
+                # Check if model has embedding_field config - only then generate
+                model_config = getattr(record, 'model_config', {}) or {}
+                embedding_field = model_config.get('embedding_field')
+
+                if embedding_field:
+                    # Determine which fields to try:
+                    # - True: use default precedence (description → content)
+                    # - "fieldname": use that specific field, then defaults
+                    if embedding_field is True:
+                        fields_to_try = DEFAULT_EMBEDDING_FIELDS
+                    else:
+                        fields_to_try = [embedding_field] + DEFAULT_EMBEDDING_FIELDS
+
+                    for field_name in fields_to_try:
+                        content = getattr(record, field_name, None)
+                        if content and isinstance(content, str):
+                            logger.debug(f"Generating embedding for {field_name}")
+                            embedding_list = await generate_embedding_async(content)
+                            # Format as PostgreSQL array literal for pgvector
+                            embedding = "[" + ",".join(str(x) for x in embedding_list) + "]"
+                            break  # Use first field with content
 
             # =================================================================
             # SQL GENERATION AND EXECUTION

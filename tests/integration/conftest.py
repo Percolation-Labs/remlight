@@ -37,16 +37,21 @@ def event_loop():
 
 @pytest.fixture
 async def db():
-    """Provide a connected database service for integration tests."""
-    from remlight.services.database import DatabaseService
+    """Provide a connected database service for integration tests.
 
-    service = DatabaseService()
+    Uses get_db() singleton to ensure ContentService and other services
+    share the same connection pool.
+    """
+    from remlight.services.database import get_db
+
+    service = get_db()
     await service.connect()
 
     # Drop problematic triggers that may not have their functions
     await service.execute("DROP TRIGGER IF EXISTS ontologies_embedding_queue ON ontologies")
     await service.execute("DROP TRIGGER IF EXISTS resources_embedding_queue ON resources")
     await service.execute("DROP TRIGGER IF EXISTS messages_embedding_queue ON messages")
+    await service.execute("DROP TRIGGER IF EXISTS agents_embedding_queue ON agents")
 
     yield service
 
