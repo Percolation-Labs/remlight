@@ -17,8 +17,30 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 from remlight.services.database import DatabaseService, get_db
+
+
+# Request models for REST API endpoints
+class SearchRequest(BaseModel):
+    """Request body for search endpoint."""
+    query: str
+    limit: int = 20
+    user_id: str | None = None
+
+
+class ParseFileRequest(BaseModel):
+    """Request body for parse-file endpoint.
+
+    Files are stored globally by default. Avoid setting user_id unless you
+    specifically need per-user file isolation.
+    """
+    uri: str
+    user_id: str | None = None
+    save_to_db: bool = True
+
+
 from remlight.settings import settings
 
 # Router for REST API exposure
@@ -655,9 +677,12 @@ async def parse_file(
     """
     Parse a file and extract content.
 
-    Reads files from local filesystem or S3 and extracts text content.
+    Reads files from local filesystem, S3, or HTTP URLs and extracts text content.
     Uses Kreuzberg for document parsing (PDF, DOCX, PPTX, XLSX, images).
     Saves the parsed result to the files table with rich metadata.
+
+    Files are stored globally by default. Avoid setting user_id unless you
+    specifically need per-user file isolation (this prevents file sharing).
 
     Supported formats:
     - Documents: PDF, DOCX, PPTX, XLSX (via Kreuzberg with OCR fallback)
@@ -665,8 +690,8 @@ async def parse_file(
     - Text: Markdown, JSON, YAML, code files (UTF-8 extraction)
 
     Args:
-        uri: File URI - local path, file:// URI, or s3:// URI
-        user_id: Optional user ID for scoping
+        uri: File URI - local path, file://, s3://, or http(s):// URL
+        user_id: Optional user ID (rarely needed - makes file user-specific)
         save_to_db: Whether to save File entity to database (default: True)
 
     Returns:
@@ -681,7 +706,8 @@ async def parse_file(
 
     Examples:
         parse_file("./document.pdf")
-        parse_file("s3://bucket/file.docx", user_id="user-123")
+        parse_file("s3://bucket/report.docx")
+        parse_file("https://example.com/paper.pdf")
         parse_file("/path/to/image.png", save_to_db=False)
     """
     from remlight.services.content import get_content_service
@@ -715,20 +741,12 @@ async def parse_file(
 
 
 @router.post("/search")
-async def search_endpoint(
-    query: str,
-    limit: int = 20,
-    user_id: str | None = None,
-) -> dict[str, Any]:
+async def search_endpoint(request: SearchRequest) -> dict[str, Any]:
     """REST endpoint for search tool."""
-    return await search(query=query, limit=limit, user_id=user_id)
+    return await search(query=request.query, limit=request.limit, user_id=request.user_id)
 
 
 @router.post("/parse-file")
-async def parse_file_endpoint(
-    uri: str,
-    user_id: str | None = None,
-    save_to_db: bool = True,
-) -> dict[str, Any]:
+async def parse_file_endpoint(request: ParseFileRequest) -> dict[str, Any]:
     """REST endpoint for parse_file tool."""
-    return await parse_file(uri=uri, user_id=user_id, save_to_db=save_to_db)
+    return await parse_file(uri=request.uri, user_id=request.user_id, save_to_db=request.save_to_db)

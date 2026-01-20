@@ -2,7 +2,7 @@
 ContentService for file processing.
 
 Pipeline:
-1. Read file from URI (local or S3)
+1. Read file from URI (local, S3, or HTTP) via FileSystemService
 2. Extract content via provider plugins
 3. Save File entity to database with parsed_output
 4. Optionally chunk and embed into resources (future: ingest_resources)
@@ -13,12 +13,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-import boto3
-from botocore.exceptions import ClientError
 from loguru import logger
 
 from remlight.models.entities import File
-from remlight.settings import settings
+from remlight.services.fs import FileSystemService, get_fs_service
 
 from .providers import (
     ContentProvider,
@@ -33,16 +31,23 @@ class ContentService:
     """
     Service for processing files: read → extract → save.
 
-    Supports:
+    Supports (via FileSystemService):
     - Local file paths (file:// or plain paths)
     - S3 URIs (s3://bucket/key)
+    - HTTP/HTTPS URLs
     - Pluggable content providers
     """
 
-    def __init__(self):
+    def __init__(self, fs: FileSystemService | None = None):
+        """
+        Initialize ContentService.
+
+        Args:
+            fs: FileSystemService instance (uses singleton if not provided)
+        """
+        self.fs = fs or get_fs_service()
         self.providers: dict[str, ContentProvider] = {}
         self._register_default_providers()
-        self._s3_client = None
 
     def _register_default_providers(self):
         """Register default content providers."""
@@ -58,41 +63,13 @@ class ContentService:
 
         logger.debug(f"Registered {len(self.providers)} file extensions")
 
-    @property
-    def s3_client(self):
-        """Lazy-load S3 client."""
-        if self._s3_client is None:
-            self._s3_client = self._create_s3_client()
-        return self._s3_client
-
-    def _create_s3_client(self):
-        """Create S3 client with environment credentials."""
-        import os
-
-        s3_config: dict[str, Any] = {
-            "region_name": os.getenv("AWS_REGION", "us-east-1"),
-        }
-
-        # Custom endpoint for MinIO/LocalStack
-        endpoint_url = os.getenv("S3__ENDPOINT_URL")
-        if endpoint_url:
-            s3_config["endpoint_url"] = endpoint_url
-
-        # Access keys (not needed with IRSA in EKS)
-        access_key = os.getenv("AWS_ACCESS_KEY_ID")
-        secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
-        if access_key and secret_key:
-            s3_config["aws_access_key_id"] = access_key
-            s3_config["aws_secret_access_key"] = secret_key
-
-        return boto3.client("s3", **s3_config)
-
-    def process_uri(self, uri: str) -> dict[str, Any]:
+    async def process_uri(self, uri: str, allow_local: bool = True) -> dict[str, Any]:
         """
         Process a file URI and extract content.
 
         Args:
-            uri: File URI (s3://bucket/key, file:///path, or plain path)
+            uri: File URI (s3://bucket/key, file:///path, http://, or plain path)
+            allow_local: Whether to allow local file paths
 
         Returns:
             dict with:
@@ -108,88 +85,32 @@ class ContentService:
         """
         logger.info(f"Processing URI: {uri}")
 
-        # Determine if S3 or local file
-        if uri.startswith("s3://"):
-            return self._process_s3_uri(uri)
-        else:
-            return self._process_local_file(uri)
+        # Read file content via FileSystemService
+        content_bytes, file_name, source_type = await self.fs.read_uri(
+            uri, allow_local=allow_local
+        )
 
-    def _process_s3_uri(self, uri: str) -> dict[str, Any]:
-        """Process S3 URI."""
-        parsed = urlparse(uri)
-        bucket = parsed.netloc
-        key = parsed.path.lstrip("/")
+        # Get file extension
+        file_path = Path(file_name)
+        suffix = file_path.suffix
 
-        if not bucket or not key:
-            raise ValueError(f"Invalid S3 URI: {uri}")
-
-        logger.debug(f"Downloading s3://{bucket}/{key}")
-
-        try:
-            response = self.s3_client.get_object(Bucket=bucket, Key=key)
-            content_bytes = response["Body"].read()
-
-            metadata = {
-                "size": response["ContentLength"],
-                "content_type": response.get("ContentType", ""),
-                "last_modified": response["LastModified"].isoformat(),
-                "etag": response.get("ETag", "").strip('"'),
-            }
-
-            # Extract content using provider
-            file_path = Path(key)
-            provider = self._get_provider(file_path.suffix)
-
-            extracted_content = provider.extract(content_bytes, metadata)
-
-            return {
-                "uri": uri,
-                "content": extracted_content["text"],
-                "metadata": {**metadata, **extracted_content.get("metadata", {})},
-                "provider": provider.name,
-            }
-
-        except ClientError as e:
-            error_code = e.response.get("Error", {}).get("Code", "")
-            if error_code == "NoSuchKey":
-                raise FileNotFoundError(f"S3 object not found: {uri}") from e
-            elif error_code == "NoSuchBucket":
-                raise FileNotFoundError(f"S3 bucket not found: {bucket}") from e
-            else:
-                raise RuntimeError(f"S3 error: {e}") from e
-
-    def _process_local_file(self, path: str) -> dict[str, Any]:
-        """Process local file path."""
-        # Handle file:// URI scheme
-        if path.startswith("file://"):
-            path = path.replace("file://", "")
-
-        file_path = Path(path)
-
-        if not file_path.exists():
-            raise FileNotFoundError(f"File not found: {path}")
-
-        if not file_path.is_file():
-            raise ValueError(f"Not a file: {path}")
-
-        logger.debug(f"Reading local file: {file_path}")
-
-        # Read file content
-        content_bytes = file_path.read_bytes()
-
-        # Get metadata
-        stat = file_path.stat()
+        # Build metadata
         metadata = {
-            "size": stat.st_size,
-            "modified": stat.st_mtime,
+            "size": len(content_bytes),
+            "source_type": source_type,
         }
 
         # Extract content using provider
-        provider = self._get_provider(file_path.suffix)
+        provider = self._get_provider(suffix)
         extracted_content = provider.extract(content_bytes, metadata)
 
+        # Resolve URI for local files
+        resolved_uri = uri
+        if source_type == "local" and not uri.startswith(("file://", "s3://", "http")):
+            resolved_uri = str(Path(uri).absolute())
+
         return {
-            "uri": str(file_path.absolute()),
+            "uri": resolved_uri,
             "content": extracted_content["text"],
             "metadata": {**metadata, **extracted_content.get("metadata", {})},
             "provider": provider.name,
@@ -229,9 +150,13 @@ class ContentService:
         """
         Parse a file and optionally save to database.
 
+        Files are stored globally by default. Avoid setting user_id unless you
+        specifically need per-user file isolation (this prevents file sharing).
+
         Args:
-            uri: File URI (local path, s3://)
-            user_id: User ID for scoping
+            uri: File URI (local path, s3://, http://)
+            user_id: Optional user ID for scoping (rarely needed - makes file
+                     user-specific and not visible to other users)
             save_to_db: Whether to save File entity to database
             file_id: Optional custom file ID (defaults to generated UUID).
                      Useful for deterministic IDs or external system integration.
@@ -249,7 +174,7 @@ class ContentService:
 
         try:
             # Process file
-            result = self.process_uri(uri)
+            result = await self.process_uri(uri)
 
             # Build parsed_output
             parsed_output = {

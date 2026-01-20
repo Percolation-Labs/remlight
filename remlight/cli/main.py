@@ -469,20 +469,25 @@ async def _eval_async(
 
 @cli.command()
 @click.argument("uri", type=str)
-@click.option("--user-id", "-u", help="User ID for scoping")
+@click.option("--user-id", "-u", help="User ID (rarely needed - scopes file to user)")
 @click.option("--save/--no-save", default=True, help="Save to database (default: yes)")
 @click.option("--output", "-o", type=click.Choice(["json", "text"]), default="json", help="Output format")
 def parse(uri: str, user_id: str | None, save: bool, output: str):
     """
     Parse a file and extract content.
 
-    Supports local files, file:// URIs, and s3:// URIs.
+    Supports local files, file:// URIs, s3:// URIs, and http(s):// URLs.
     Uses Kreuzberg for document parsing (PDF, DOCX, PPTX, XLSX, images).
+
+    Files are stored globally by default (no user scoping). Only use --user-id
+    if you specifically need per-user file isolation.
 
     Examples:
         rem parse document.pdf
-        rem parse s3://bucket/file.docx --user-id user-123
-        rem parse ./README.md --output text --no-save
+        rem parse s3://bucket/report.docx
+        rem parse https://example.com/paper.pdf
+        rem parse ./README.md --output text
+        rem parse document.pdf --no-save
     """
     asyncio.run(_parse_async(uri, user_id, save, output))
 

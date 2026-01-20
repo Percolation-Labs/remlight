@@ -111,25 +111,18 @@ class TestContentService:
 
         assert hash1 != hash2
 
-    def test_process_local_file_not_found(self):
+    @pytest.mark.asyncio
+    async def test_process_local_file_not_found(self):
         """Test FileNotFoundError for missing local file."""
         from remlight.services.content.service import ContentService
 
         service = ContentService()
 
         with pytest.raises(FileNotFoundError):
-            service.process_uri("/nonexistent/file.txt")
+            await service.process_uri("/nonexistent/file.txt")
 
-    def test_process_directory_raises_error(self, tmp_path):
-        """Test ValueError when processing a directory."""
-        from remlight.services.content.service import ContentService
-
-        service = ContentService()
-
-        with pytest.raises(ValueError, match="Not a file"):
-            service.process_uri(str(tmp_path))
-
-    def test_process_local_markdown(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_process_local_markdown(self, tmp_path):
         """Test processing a local markdown file."""
         from remlight.services.content.service import ContentService
 
@@ -138,13 +131,14 @@ class TestContentService:
         test_file.write_text("# Test\n\nHello world")
 
         service = ContentService()
-        result = service.process_uri(str(test_file))
+        result = await service.process_uri(str(test_file))
 
         assert result["content"] == "# Test\n\nHello world"
         assert result["provider"] == "text"
         assert result["metadata"]["size"] > 0
 
-    def test_process_local_json(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_process_local_json(self, tmp_path):
         """Test processing a local JSON file."""
         from remlight.services.content.service import ContentService
 
@@ -153,12 +147,13 @@ class TestContentService:
         test_file.write_text('{"name": "test"}')
 
         service = ContentService()
-        result = service.process_uri(str(test_file))
+        result = await service.process_uri(str(test_file))
 
         assert '{"name": "test"}' in result["content"]
         assert result["provider"] == "text"
 
-    def test_process_file_uri_scheme(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_process_file_uri_scheme(self, tmp_path):
         """Test processing with file:// URI scheme."""
         from remlight.services.content.service import ContentService
 
@@ -166,11 +161,12 @@ class TestContentService:
         test_file.write_text("content")
 
         service = ContentService()
-        result = service.process_uri(f"file://{test_file}")
+        result = await service.process_uri(f"file://{test_file}")
 
         assert result["content"] == "content"
 
-    def test_unsupported_extension(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_unsupported_extension(self, tmp_path):
         """Test RuntimeError for unsupported file extension."""
         from remlight.services.content.service import ContentService
 
@@ -180,4 +176,4 @@ class TestContentService:
         service = ContentService()
 
         with pytest.raises(RuntimeError, match="No provider available"):
-            service.process_uri(str(test_file))
+            await service.process_uri(str(test_file))

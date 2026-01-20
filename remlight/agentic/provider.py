@@ -704,10 +704,20 @@ async def create_agent(
     Cache hits avoid repeated schema parsing and agent instantiation.
     Cache is bypassed when structured_output_override is provided.
 
+    MODEL PRIORITY
+    --------------
+    Model selection follows this priority order:
+    1. schema.override_model (highest) - Agent forces a specific model
+    2. model_name parameter - Request/CLI override
+    3. settings.llm.default_model (lowest) - Environment default
+
+    Use override_model in agent schemas when an agent REQUIRES a specific
+    model (e.g., for vision capabilities or specific reasoning abilities).
+
     Args:
         schema: Agent definition as dict (raw YAML) or AgentSchema (parsed)
         model_name: LLM model identifier (e.g., "openai:gpt-4.1", "anthropic:claude-sonnet-4-5-20250929")
-                   Falls back to settings.llm.default_model
+                   Overrides settings.llm.default_model, but NOT schema.override_model
         tools: List of tool functions or dict of {name: FunctionTool}
                These are filtered based on schema.tools configuration
         context: AgentContext with session info and user_profile_hint
@@ -735,11 +745,25 @@ async def create_agent(
         )
         result = await runtime.agent.run("Find documents about AI")
     """
-    # Resolve model early for cache key
-    resolved_model = model_name or settings.llm.default_model
-
-    # Extract user_id for cache key
+    # Extract user_id for cache key (needed before schema parsing)
     user_id = context.user_id if context else None
+
+    # Parse schema early to check for model override
+    if isinstance(schema, dict):
+        parsed_schema = AgentSchema(**schema)
+    else:
+        parsed_schema = schema
+
+    # Resolve model with priority: schema override > request > default
+    # Schema override is for agents that REQUIRE a specific model
+    meta: AgentSchemaMetadata = parsed_schema.json_schema_extra
+    if meta.override_model:
+        resolved_model = meta.override_model
+        logger.debug(f"Using schema-forced model: {resolved_model}")
+    elif model_name:
+        resolved_model = model_name
+    else:
+        resolved_model = settings.llm.default_model
 
     # =========================================================================
     # CACHE LOOKUP
@@ -754,12 +778,8 @@ async def create_agent(
         if cached_agent is not None:
             return cached_agent
 
-    # Parse schema if provided as raw dict (e.g., from YAML load)
-    if isinstance(schema, dict):
-        schema = AgentSchema(**schema)
-
-    meta: AgentSchemaMetadata = schema.json_schema_extra
-    model_name = model_name or settings.llm.default_model
+    # Use already-parsed schema from model resolution above
+    schema = parsed_schema
 
     # Resolve runtime configuration from schema overrides or global settings
     # Schema can override defaults for specific agent types (e.g., low temp for extraction)
@@ -863,7 +883,7 @@ async def create_agent(
     # =========================================================================
 
     agent = Agent(
-        model=model_name,
+        model=resolved_model,
         system_prompt=system_prompt,
         output_type=output_type,
         tools=agent_tools,

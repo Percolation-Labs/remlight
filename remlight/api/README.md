@@ -78,6 +78,7 @@ result = await search("LOOKUP sarah-chen")
 | `/api/v1/chat/completions` | POST | OpenAI-compatible chat |
 | `/api/v1/query` | POST | REM query execution |
 | `/api/v1/tools/search` | POST | Search tool |
+| `/api/v1/tools/parse-file` | POST | Parse file and extract content |
 | `/api/v1/agents` | GET | List available agent schemas |
 | `/api/v1/agents/{name}` | GET | Get specific agent |
 | `/api/v1/sessions` | GET | List user sessions |
@@ -96,6 +97,7 @@ result = await search("LOOKUP sarah-chen")
 | `search` | Execute REM queries (LOOKUP, FUZZY, SEARCH, TRAVERSE) |
 | `action` | Emit typed action events (observation, elicit, delegate) for SSE streaming |
 | `ask_agent` | Multi-agent orchestration |
+| `parse_file` | Parse files (PDF, DOCX, images) and extract content |
 
 ### MCP Resources
 
@@ -190,6 +192,38 @@ async with httpx.AsyncClient() as client:
         }
     )
 ```
+
+### Parse File
+
+Parse and extract content from documents (PDF, DOCX, images, etc.):
+
+```python
+import httpx
+
+async with httpx.AsyncClient() as client:
+    # Parse a local file
+    response = await client.post(
+        "http://localhost:8000/api/v1/tools/parse-file",
+        json={"uri": "./document.pdf"}
+    )
+
+    # Parse from S3
+    response = await client.post(
+        "http://localhost:8000/api/v1/tools/parse-file",
+        json={"uri": "s3://bucket/report.docx"}
+    )
+
+    # Parse from URL (don't save to database)
+    response = await client.post(
+        "http://localhost:8000/api/v1/tools/parse-file",
+        json={
+            "uri": "https://example.com/paper.pdf",
+            "save_to_db": False
+        }
+    )
+```
+
+**Note**: Files are stored globally by default. Avoid setting `user_id` unless you specifically need per-user file isolation.
 
 ## Standard Headers
 

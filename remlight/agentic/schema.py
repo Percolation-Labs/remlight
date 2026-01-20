@@ -225,6 +225,10 @@ class AgentSchemaMetadata(BaseModel):
 
     resources: List of MCPResourceReference - which resources agent can access
 
+    override_model: Per-agent model (forces this model, ignoring request/default)
+                    Use when an agent REQUIRES a specific model capability.
+                    Model priority: override_model > request model > default_model
+
     override_temperature: Per-agent temperature (overrides global setting)
                          Lower = more deterministic, higher = more creative
 
@@ -256,6 +260,7 @@ class AgentSchemaMetadata(BaseModel):
     resources: list[MCPResourceReference] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     author: str | None = None
+    override_model: str | None = None  # Per-agent model override (forces this model)
     override_temperature: float | None = None  # Per-agent temperature override
     override_max_iterations: int | None = None  # Per-agent max iterations override
 
