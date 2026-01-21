@@ -2,27 +2,6 @@
 
 A lightweight agentic framework built on [REM](https://github.com/mr-saoirse/rem) - the declarative memory and query system for PostgreSQL.
 
-## Quick Start
-
-```bash
-# Install
-pip install -e .
-docker compose up postgres -d
-
-# Test with CLI
-rem ask "What can you help me with?"
-
-# Or start API server
-rem serve --port 8001
-```
-
-## What is REMLight?
-
-- **Declarative Agents**: Define agents in YAML with JSON Schema
-- **Multi-Agent Orchestration**: Child agents stream through parent SSE connections
-- **OpenAI-compatible API**: Drop-in replacement for chat completions
-- **MCP Tools**: `search`, `action`, `ask_agent` via FastMCP
-
 ## Blog Series
 
 | Part | Description |
@@ -31,20 +10,144 @@ rem serve --port 8001
 | [Part II](https://medium.com/@mrsirsh/part-ii-of-a-really-simply-declarative-agent-framework-320da34e5b4d) | Agent construction & tool signatures |
 | [Part III](https://medium.com/@mrsirsh/part-iii-of-a-really-simply-declarative-agent-framework-fc96cc950c11) | Streaming, SSE events & database persistence |
 
+## Quick Start
+
+### 1. Start Services (Docker)
+
+```bash
+docker compose up -d
+```
+
+This starts:
+- **postgres** (port 5432) - pgvector database, auto-runs `sql/install.sql` on first startup
+- **phoenix** (port 6016) - Arize Phoenix for tracing/observability
+- **api** (port 8080) - REMLight API server with hot reload
+
+### 2. Set Environment
+
+```bash
+cp .env.example .env
+# Edit .env and add your API key:
+# OPENAI_API_KEY=sk-...
+```
+
+### 3. Ingest Ontology
+
+```bash
+rem ingest ontology/
+```
+
+### 4. Query the Knowledge Base
+
+```bash
+# Exact key lookup
+rem query "LOOKUP architecture"
+
+# Semantic search
+rem query "SEARCH declarative agents IN ontologies"
+
+# Fuzzy text match
+rem query "FUZZY multi-agent"
+```
+
+### 5. Ask an Agent
+
+```bash
+# Simple question
+rem ask "What can you help me with?"
+
+# Use specific agent schema
+rem ask "Find documents about AI" --schema query-agent
+
+# Multi-turn conversation (session UUID)
+rem ask "What is REM?" --session 550e8400-e29b-41d4-a716-446655440000
+rem ask "Tell me more" --session 550e8400-e29b-41d4-a716-446655440000
+```
+
+## API Usage
+
+### Start Server (Local Development)
+
+```bash
+rem serve --port 8001 --reload
+```
+
+### Chat Completions (OpenAI-compatible)
+
+```bash
+curl -X POST http://localhost:8001/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: user-123" \
+  -H "X-Session-Id: 550e8400-e29b-41d4-a716-446655440000" \
+  -d '{
+    "messages": [{"role": "user", "content": "What is machine learning?"}],
+    "stream": true
+  }'
+```
+
+### Direct Query
+
+```bash
+curl -X POST http://localhost:8001/api/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "LOOKUP architecture"}'
+```
+
+### Search Tool
+
+```bash
+curl -X POST http://localhost:8001/api/v1/tools/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "SEARCH declarative agents IN ontologies", "limit": 5}'
+```
+
+## Phoenix Tracing
+
+When running with Docker, traces are automatically sent to Phoenix:
+
+1. Open Phoenix UI: http://localhost:6016
+2. View traces for all agent executions
+3. Inspect tool calls, latencies, token usage
+
+To enable tracing in local development:
+
+```bash
+export OTEL__ENABLED=true
+export OTEL__COLLECTOR_ENDPOINT=http://localhost:6016
+```
+
+## Docker Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  docker compose up -d                                       │
+└─────────────────────────────────────────────────────────────┘
+         │
+         ├── postgres (pgvector/pgvector:pg18)
+         │     ├── Port: 5432
+         │     ├── Auto-runs: sql/install.sql (creates tables, triggers)
+         │     └── Volume: postgres_data
+         │
+         ├── phoenix (arizephoenix/phoenix)
+         │     ├── Port: 6016 (UI + OTLP collector)
+         │     └── Volume: phoenix_data
+         │
+         └── api (Dockerfile)
+               ├── Port: 8080 → 8000
+               ├── Hot reload: ./remlight, ./schemas mounted
+               └── Connects to: postgres:5432, phoenix:6006
+```
+
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
 | [code-walkthrough.md](code-walkthrough.md) | Agent construction, streaming, tool signatures |
+| [remlight/cli/README.md](remlight/cli/README.md) | CLI commands |
 | [remlight/api/README.md](remlight/api/README.md) | API endpoints |
+| [remlight/agentic/README.md](remlight/agentic/README.md) | Agent runtime |
 | [schemas/](schemas/) | Agent YAML examples |
 | [app/README.md](app/README.md) | React chat client |
-
-## Environment
-
-```bash
-export OPENAI_API_KEY=sk-...
-```
 
 ## License
 
