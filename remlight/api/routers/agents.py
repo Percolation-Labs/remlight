@@ -39,6 +39,7 @@ class AgentInfo(BaseModel):
     enabled: bool = True
     source: str = "filesystem"  # 'filesystem' or 'database'
     description: str | None = None
+    icon: str | None = None
     tags: list[str] = []
 
 
@@ -53,6 +54,7 @@ class AgentUpsertRequest(BaseModel):
 
     content: str = Field(..., description="Full YAML content of the agent schema")
     enabled: bool = Field(default=True, description="Whether the agent is active")
+    icon: str | None = Field(default=None, description="Icon URL or emoji")
     tags: list[str] = Field(default_factory=list, description="Classification tags")
 
 
@@ -84,6 +86,7 @@ class AgentSearchResult(BaseModel):
     title: str | None = None
     version: str
     description: str | None = None
+    icon: str | None = None
     tags: list[str] = []
     source: str
     similarity: float | None = None  # Only for semantic search
@@ -104,6 +107,7 @@ class AgentContentResponse(BaseModel):
     content: str
     source: str
     enabled: bool = True
+    icon: str | None = None
     tags: list[str] = []
 
 
@@ -156,6 +160,7 @@ def load_agent_info_from_db(agent: Agent) -> AgentInfo:
         enabled=agent.enabled,
         source="database",
         description=agent.description[:200] if agent.description else None,
+        icon=agent.icon,
         tags=tags,
     )
 
@@ -316,6 +321,7 @@ async def get_agent_content(
                 content=db_agent.content,
                 source="database",
                 enabled=db_agent.enabled,
+                icon=db_agent.icon,
                 tags=db_agent.tags,
             )
         else:
@@ -372,6 +378,7 @@ async def upsert_agent(request: AgentUpsertRequest) -> AgentUpsertResponse:
         content=request.content,
         version=meta.version,
         enabled=request.enabled,
+        icon=request.icon,
         tags=request.tags or meta.tags,
     )
 

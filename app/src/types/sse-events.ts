@@ -158,6 +158,42 @@ export interface ProgressEvent {
 }
 
 /**
+ * Schema update event from agent-builder.
+ * Updates a specific section of the schema being built.
+ */
+export interface SchemaUpdateEvent {
+  type: "schema_update"
+  /** Which section to update */
+  section: "tools" | "system_prompt" | "properties" | "metadata"
+  /** The new value */
+  value: unknown
+  /** Operation type */
+  operation?: "set" | "append" | "remove"
+  /** Optional nested path within section */
+  path?: string
+  /** Action event marker */
+  _action_event?: boolean
+  action_type?: "schema_update"
+}
+
+/**
+ * Schema focus event from agent-builder.
+ * Highlights a specific section in the UI.
+ */
+export interface SchemaFocusEvent {
+  type: "schema_focus"
+  /** Which section to focus */
+  section: "tools" | "system_prompt" | "properties" | "metadata" | null
+  /** Optional property path for properties section */
+  property_path?: string
+  /** Optional message to display */
+  message?: string
+  /** Action event marker */
+  _action_event?: boolean
+  action_type?: "schema_focus"
+}
+
+/**
  * Union type of all possible SSE events.
  */
 export type SSEEvent =
@@ -171,6 +207,8 @@ export type SSEEvent =
   | ChildContentEvent
   | ChildToolEvent
   | ProgressEvent
+  | SchemaUpdateEvent
+  | SchemaFocusEvent
 
 /**
  * Raw SSE event before type discrimination.

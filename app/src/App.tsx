@@ -5,7 +5,7 @@
  */
 
 import { BrowserRouter, Routes, Route } from "react-router-dom"
-import { ChatPage, SettingsPage } from "@/pages"
+import { ChatPage, SettingsPage, AgentBuilderPage } from "@/pages"
 
 function App() {
   return (
@@ -15,6 +15,8 @@ function App() {
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/chat/:sessionId" element={<ChatPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/agent-builder" element={<AgentBuilderPage />} />
+        <Route path="/agent-builder/:agentName" element={<AgentBuilderPage />} />
       </Routes>
     </BrowserRouter>
   )

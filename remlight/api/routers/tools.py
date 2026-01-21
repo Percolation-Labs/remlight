@@ -43,8 +43,8 @@ class ParseFileRequest(BaseModel):
 
 from remlight.settings import settings
 
-# Router for REST API exposure
-router = APIRouter(prefix="/tools", tags=["tools"])
+# Router for REST API exposure (MCP tool execution endpoints)
+router = APIRouter(prefix="/mcp-tools", tags=["mcp-tools"])
 
 # Module-level state
 _db: DatabaseService | None = None
@@ -87,11 +87,18 @@ def get_agent_schema(name: str) -> dict | None:
 
 
 async def get_user_profile(user_id: str) -> dict | None:
-    """Load user profile from database."""
+    """Load user profile from database.
+
+    Args:
+        user_id: User identifier - can be user_id field, UUID, or email
+
+    Returns:
+        User profile dict or None if not found
+    """
     db = get_tools_db()
     try:
         row = await db.fetchrow(
-            "SELECT * FROM users WHERE user_id = $1 OR id::text = $1",
+            "SELECT * FROM users WHERE user_id = $1 OR id::text = $1 OR email = $1",
             user_id
         )
         return dict(row) if row else None
@@ -152,6 +159,87 @@ def format_user_profile(profile: dict) -> str:
         output.append(f"\n**Activity Level:** {profile['activity_level']}")
 
     return "\n".join(output)
+
+
+async def get_project(project_key: str) -> dict | None:
+    """
+    Load project details by key.
+
+    TODO: In future, save project lookups to database for analytics.
+    Currently fetches from ontologies table where entity_type = 'project'.
+
+    Args:
+        project_key: Project identifier (e.g., 'project-alpha')
+
+    Returns:
+        Project dict with name, description, properties, etc.
+    """
+    import json as json_lib
+
+    db = get_tools_db()
+    try:
+        # Try to find in ontologies table (projects are stored as ontology entities)
+        row = await db.fetchrow(
+            """
+            SELECT id, name, description, category, entity_type, properties, tags, metadata
+            FROM ontologies
+            WHERE name = $1 AND entity_type = 'project' AND deleted_at IS NULL
+            """,
+            project_key
+        )
+        if row:
+            result = dict(row)
+            # Merge properties into top-level for easier access
+            # Properties may be a JSON string or dict depending on driver
+            props = result.get("properties")
+            if props:
+                if isinstance(props, str):
+                    props = json_lib.loads(props)
+                result.update(props)
+            return result
+
+        # Fallback: try kv_store lookup
+        row = await db.fetchrow(
+            "SELECT data FROM kv_store WHERE entity_key = $1",
+            project_key
+        )
+        if row and row["data"]:
+            data = row["data"]
+            if isinstance(data, str):
+                data = json_lib.loads(data)
+            return dict(data)
+
+        return None
+    except Exception:
+        return None
+
+
+def format_project(project: dict) -> str:
+    """
+    Format project as JSON string for MCP resource.
+
+    Returns structured JSON that agents can parse and use.
+    """
+    import json
+
+    # Build clean project output
+    output = {
+        "name": project.get("name"),
+        "description": project.get("description"),
+        "category": project.get("category"),
+        "status": project.get("status"),
+        "lead": project.get("lead"),
+        "team_size": project.get("team_size"),
+        "start_date": project.get("start_date"),
+        "budget": project.get("budget"),
+        "priority": project.get("priority"),
+        "tags": project.get("tags", []),
+    }
+
+    # Remove None values for cleaner output
+    output = {k: v for k, v in output.items() if v is not None}
+
+    return json.dumps(output, indent=2)
 
 
 def get_metadata(request_id: str = "default") -> dict[str, Any]:
@@ -732,6 +820,145 @@ async def parse_file(
             "status": "error",
             "error": str(e),
             "uri": uri,
+        }
+
+
+async def save_agent(
+    name: str,
+    schema_yaml: str,
+    description: str | None = None,
+    tags: list[str] | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """
+    Save an agent schema to the database.
+
+    Creates or updates an agent schema in the database. The schema is validated
+    before saving to ensure it's a valid agent definition.
+
+    Args:
+        name: Unique agent name (e.g., "my-feedback-agent")
+        schema_yaml: Complete agent schema as YAML string
+        description: Optional short description for listing
+        tags: Optional tags for discovery
+        overwrite: Whether to update if agent already exists
+
+    Returns:
+        Dict with:
+            - status: 'success' or 'error'
+            - agent_name: The agent name
+            - version: Schema version
+            - created: True if newly created, False if updated
+
+    Examples:
+        save_agent("my-agent", "type: object\\ndescription: ...", tags=["custom"])
+    """
+    import yaml
+
+    db = get_tools_db()
+
+    try:
+        # Parse and validate YAML
+        try:
+            schema = yaml.safe_load(schema_yaml)
+        except yaml.YAMLError as e:
+            return {
+                "status": "error",
+                "error": f"Invalid YAML: {e}",
+                "_action_event": True,
+                "action_type": "agent_save_error",
+            }
+
+        # Validate basic schema structure
+        if not isinstance(schema, dict):
+            return {
+                "status": "error",
+                "error": "Schema must be a YAML object",
+                "_action_event": True,
+                "action_type": "agent_save_error",
+            }
+
+        if "description" not in schema:
+            return {
+                "status": "error",
+                "error": "Schema must have a 'description' field (system prompt)",
+                "_action_event": True,
+                "action_type": "agent_save_error",
+            }
+
+        # Get version from schema
+        json_schema_extra = schema.get("json_schema_extra", {})
+        version = json_schema_extra.get("version", "1.0.0")
+
+        # Check if agent exists
+        existing = await db.fetchrow(
+            "SELECT id FROM agents WHERE name = $1 AND deleted_at IS NULL",
+            name
+        )
+
+        if existing and not overwrite:
+            return {
+                "status": "error",
+                "error": f"Agent '{name}' already exists. Use overwrite=True to update.",
+                "_action_event": True,
+                "action_type": "agent_save_error",
+            }
+
+        # Prepare agent data
+        schema_tags = json_schema_extra.get("tags", [])
+        all_tags = list(set((tags or []) + schema_tags))
+
+        if existing:
+            # Update existing agent
+            await db.execute(
+                """
+                UPDATE agents
+                SET content = $2,
+                    description = $3,
+                    tags = $4,
+                    updated_at = NOW()
+                WHERE name = $1 AND deleted_at IS NULL
+                """,
+                name,
+                schema_yaml,
+                description or schema.get("description", "")[:200],
+                all_tags,
+            )
+            created = False
+        else:
+            # Insert new agent
+            await db.execute(
+                """
+                INSERT INTO agents (name, content, description, tags, enabled)
+                VALUES ($1, $2, $3, $4, TRUE)
+                """,
+                name,
+                schema_yaml,
+                description or schema.get("description", "")[:200],
+                all_tags,
+            )
+            created = True
+
+        return {
+            "status": "success",
+            "agent_name": name,
+            "version": version,
+            "created": created,
+            "_action_event": True,
+            "action_type": "agent_saved",
+            "payload": {
+                "name": name,
+                "version": version,
+                "created": created,
+            },
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "_action_event": True,
+            "action_type": "agent_save_error",
         }
 
 

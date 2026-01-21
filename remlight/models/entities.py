@@ -155,6 +155,12 @@ class Agent(CoreModel):
     The 'description' field is used for semantic search embeddings. If not provided,
     embeddings are generated from 'content' as fallback.
 
+    Registry URI: Agents can specify their registry source for federation:
+    - "local" or None: Built-in local agent
+    - URL: Remote registry that owns this agent definition
+
+    The agent's ID is deterministic: hash(registry_uri + name)
+
     Time Machine: When agents are upserted, a trigger automatically records
     version history in agent_timemachine table if content changes.
     """
@@ -164,6 +170,8 @@ class Agent(CoreModel):
     content: str  # Full YAML content - source of truth
     version: str = "1.0.0"  # Schema version
     enabled: bool = True  # Whether agent is active
+    registry_uri: str | None = None  # Registry source (None = "local")
+    icon: str | None = None  # Icon URL or emoji
 
     # Embeddings: uses default precedence (description → content)
     model_config = {"embedding_field": True}
@@ -182,6 +190,87 @@ class AgentTimeMachine(CoreModel):
     version: str | None = None  # Version at time of change
     content_hash: str  # SHA256 hash for change detection
     change_type: str  # 'created', 'updated', 'deleted'
+
+
+class Server(CoreModel):
+    """MCP tool server configuration.
+
+    Servers provide tools that agents can use. They can be:
+    - local: In-process Python module (built-in)
+    - rest: Remote REST/HTTP server
+    - stdio: MCP stdio transport (subprocess)
+
+    The `registry_uri` field enables future federation where servers
+    can be discovered from remote registries.
+
+    Attributes:
+        name: Unique server identifier/alias
+        description: Server description (used for embeddings/search)
+        server_type: Type of server (local, rest, stdio)
+        endpoint: URL or command for remote/stdio servers
+        config: Server-specific configuration (auth, headers, etc.)
+        enabled: Whether server is active
+        registry_uri: Parent registry URI for federation (nullable)
+        icon: Display icon (URL or emoji)
+    """
+
+    name: str
+    description: str | None = None
+    server_type: str = "mcp"  # mcp (local), rest, stdio
+    endpoint: str | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+    registry_uri: str | None = None  # Federation support
+    icon: str | None = None
+
+    # Embeddings: uses description for search
+    model_config = {"embedding_field": "description"}
+
+    @field_validator("config", mode="before")
+    @classmethod
+    def parse_config(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return {}
+        return v
+
+
+class Tool(CoreModel):
+    """Registered tool definition.
+
+    Tools are functions that agents can call. Each tool belongs to a server
+    and has a schema describing its input parameters.
+
+    Attributes:
+        name: Tool function name
+        description: Tool description (used for embeddings/search)
+        server_id: Reference to parent server
+        input_schema: JSON Schema for tool parameters
+        enabled: Whether tool is active
+        icon: Display icon (URL or emoji)
+    """
+
+    name: str
+    description: str | None = None
+    server_id: UUID | str | None = None  # FK to servers.id
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+    icon: str | None = None
+
+    # Embeddings: uses description for search
+    model_config = {"embedding_field": "description"}
+
+    @field_validator("input_schema", mode="before")
+    @classmethod
+    def parse_input_schema(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return {}
+        return v
 
 
 class File(CoreModel):

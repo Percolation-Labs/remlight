@@ -73,7 +73,7 @@ json_schema_extra:
     - name: search
       description: Search the knowledge base
     - name: action
-      mcp_server: rem
+      server: rem
 """
         schema = schema_from_yaml(yaml_content)
 
@@ -82,7 +82,7 @@ json_schema_extra:
         assert tools[0].name == "search"
         assert tools[0].description == "Search the knowledge base"
         assert tools[1].name == "action"
-        assert tools[1].mcp_server == "rem"
+        assert tools[1].server == "rem"
 
     def test_schema_with_resources(self):
         """Test parsing schema with MCP resource references."""
@@ -361,14 +361,14 @@ class TestMCPReferences:
 
         assert ref.name == "search"
         assert ref.description == "Search the KB"
-        assert ref.mcp_server is None
+        assert ref.server is None
 
     def test_tool_reference_with_server(self):
-        """Test tool reference with MCP server specified."""
-        ref = MCPToolReference(name="action", mcp_server="rem")
+        """Test tool reference with server specified."""
+        ref = MCPToolReference(name="action", server="rem")
 
         assert ref.name == "action"
-        assert ref.mcp_server == "rem"
+        assert ref.server == "rem"
 
     def test_resource_reference_uri(self):
         """Test resource reference with exact URI."""

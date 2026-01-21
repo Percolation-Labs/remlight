@@ -1,0 +1,90 @@
+/**
+ * ChatPanel - Right panel with agent-builder chat
+ *
+ * Reuses existing chat components with agent-builder agent.
+ */
+
+import { useCallback, useState, useEffect } from "react"
+import { MessageList } from "@/components/chat/message-list"
+import { ChatInput } from "@/components/chat/chat-input"
+import { useChat } from "@/hooks/use-chat"
+import type { AgentSchemaState, SchemaUpdatePayload, SchemaFocusPayload } from "@/types/agent-schema"
+
+interface ChatPanelProps {
+  schema: AgentSchemaState
+  onSchemaUpdate: (payload: SchemaUpdatePayload) => void
+  onSchemaFocus: (payload: SchemaFocusPayload) => void
+}
+
+export function ChatPanel({ schema, onSchemaUpdate, onSchemaFocus }: ChatPanelProps) {
+  const { messages, isLoading, sendMessage, stop, setMessages } = useChat({
+    agentSchema: "agent-builder",
+    // Custom event handler for schema events
+    onCustomEvent: (event) => {
+      // Handle schema-specific action events
+      if (event._action_event) {
+        if (event.action_type === "schema_update" && event.payload) {
+          onSchemaUpdate(event.payload as SchemaUpdatePayload)
+        } else if (event.action_type === "schema_focus" && event.payload) {
+          onSchemaFocus(event.payload as SchemaFocusPayload)
+        }
+      }
+    },
+  })
+
+  const handleSend = useCallback(
+    (content: string) => {
+      // Include current schema state as context
+      const contextPrefix = schema.metadata.name
+        ? `[Current schema: ${schema.metadata.name}, ${schema.metadata.tools.length} tools, ${Object.keys(schema.properties).length} properties]\n\n`
+        : ""
+
+      sendMessage(content)
+    },
+    [sendMessage, schema]
+  )
+
+  // Welcome message
+  useEffect(() => {
+    if (messages.length === 0) {
+      setMessages([
+        {
+          id: "welcome",
+          role: "assistant",
+          content:
+            "Hi! I'm the Agent Builder. I'll help you create a new agent schema step by step.\n\nTo get started, tell me: **What should your agent do?**\n\nFor example:\n- \"Help users analyze customer feedback\"\n- \"Search documentation and answer questions\"\n- \"Generate code based on requirements\"",
+          status: "completed",
+          createdAt: new Date(),
+        },
+      ])
+    }
+  }, [messages.length, setMessages])
+
+  return (
+    <div className="flex flex-col h-full bg-white">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200">
+        <div className="flex items-center gap-2">
+          <div className="h-2 w-2 rounded-full bg-green-500" />
+          <span className="text-sm font-medium text-zinc-800">Agent Builder</span>
+        </div>
+        <span className="text-xs text-zinc-400">Building: {schema.metadata.name || "New Agent"}</span>
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-hidden">
+        <MessageList messages={messages} isLoading={isLoading} />
+      </div>
+
+      {/* Input */}
+      <div className="border-t border-zinc-200 p-4">
+        <ChatInput
+          onSend={handleSend}
+          onStop={stop}
+          isLoading={isLoading}
+          placeholder="Describe your agent or ask a question..."
+        />
+      </div>
+    </div>
+  )
+}

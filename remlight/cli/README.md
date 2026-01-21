@@ -190,7 +190,9 @@ Install the database schema (tables, triggers, functions).
 rem install
 ```
 
-This creates all required PostgreSQL tables and extensions. Run this after setting up a new database.
+Creates all required PostgreSQL tables and extensions.
+
+**Note**: When using `docker compose up`, the schema is automatically installed via init scripts. Only use `rem install` for manual database setup or when connecting to an external PostgreSQL instance.
 
 ---
 
@@ -228,23 +230,20 @@ json_schema_extra:
 ### Complete Workflow
 
 ```bash
-# 1. Start services
+# 1. Start services (schema is auto-installed via Docker init scripts)
 docker compose up -d postgres
 
-# 2. Install schema
-rem install
-
-# 3. Ingest knowledge base
+# 2. Ingest knowledge base
 rem ingest ontology/
 
-# 4. Parse some documents
+# 3. Parse some documents
 rem parse reports/q4-summary.pdf
 rem parse s3://company-docs/handbook.docx
 
-# 5. Start the server
+# 4. Start the server
 rem serve
 
-# 6. Query the knowledge base
+# 5. Query the knowledge base
 rem ask "What are our key projects?"
 rem query "SEARCH quarterly results"
 ```

@@ -56,6 +56,14 @@ function parseSSEEvent(data: RawSSEEvent, currentEventType: string): SSEEvent {
     eventType = "done"
   }
 
+  // Detect schema events from action tool (used by agent-builder)
+  if (!eventType && data._action_event && data.action_type === "schema_update") {
+    eventType = "schema_update"
+  }
+  if (!eventType && data._action_event && data.action_type === "schema_focus") {
+    eventType = "schema_focus"
+  }
+
   // Fall back to currentEventType only if we couldn't detect from structure
   if (!eventType) {
     eventType = currentEventType || "text_delta"

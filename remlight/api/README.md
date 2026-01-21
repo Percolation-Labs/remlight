@@ -104,6 +104,7 @@ result = await search("LOOKUP sarah-chen")
 | Resource URI | Description |
 |--------------|-------------|
 | `user://profile/{user_id}` | Load user profile |
+| `project://{project_key}` | Load project details (JSON) |
 | `rem://status` | System status |
 
 ## Running

@@ -584,7 +584,7 @@ class Repository(Generic[T]):
         sql, params = build_count(self.table_name, filters)
         row = await self.db.fetchrow(sql, *params)
 
-        return row[0] if row else 0
+        return row["count"] if row else 0
 
     # =========================================================================
     # CONVENIENCE METHODS FOR SPECIFIC USE CASES
@@ -620,6 +620,158 @@ class Repository(Generic[T]):
             filters["user_id"] = user_id
 
         return await self.find(filters, order_by="created_at ASC")
+
+    async def search(
+        self,
+        query: str,
+        search_type: str = "semantic",
+        limit: int = 10,
+        user_id: str | None = None,
+        include_disabled: bool = False,
+        extra_filters: dict[str, Any] | None = None,
+    ) -> list[tuple[T, float | None]]:
+        """
+        Generic search across entity types.
+
+        Supports multiple search types:
+        - semantic: Vector similarity on embedding field
+        - name: Fuzzy matching on name field using trigrams
+        - tags: Exact match on tags array
+        - all: Combine all methods, deduplicate results
+
+        This method enables consistent search across:
+        - Servers, Tools, Agents, Scenarios
+        - Any entity with embeddings
+
+        Args:
+            query: Search query string
+            search_type: Type of search (semantic, name, tags, all)
+            limit: Maximum results to return
+            user_id: Optional user filter for data isolation
+            include_disabled: Whether to include disabled entities
+            extra_filters: Additional WHERE clause filters
+
+        Returns:
+            List of (entity, similarity) tuples.
+            Similarity is a float for semantic search, None otherwise.
+        """
+        await self._ensure_connected()
+
+        results: list[tuple[T, float | None]] = []
+        seen_ids: set[str] = set()
+
+        # Helper to add unique results
+        def add_result(record: T, similarity: float | None = None):
+            record_id = str(getattr(record, 'id', ''))
+            if record_id and record_id not in seen_ids:
+                seen_ids.add(record_id)
+                results.append((record, similarity))
+
+        if search_type in ("semantic", "all"):
+            # Generate embedding for query
+            from remlight.services.embeddings import generate_embedding_async
+
+            try:
+                embedding = await generate_embedding_async(query)
+
+                # Build enabled filter
+                enabled_clause = ""
+                if not include_disabled and hasattr(self.model_class, 'enabled'):
+                    enabled_clause = "AND enabled = TRUE"
+
+                # Build user filter
+                user_clause = ""
+                params: list[Any] = [embedding, limit]
+                if user_id:
+                    user_clause = "AND (user_id = $3 OR user_id IS NULL)"
+                    params.append(user_id)
+
+                sql = f"""
+                    SELECT *, 1 - (embedding <=> $1::vector) as similarity
+                    FROM {self.table_name}
+                    WHERE embedding IS NOT NULL
+                      AND deleted_at IS NULL
+                      {enabled_clause}
+                      {user_clause}
+                      AND 1 - (embedding <=> $1::vector) >= 0.3
+                    ORDER BY embedding <=> $1::vector
+                    LIMIT $2
+                """
+
+                rows = await self.db.fetch(sql, *params)
+                for row in rows:
+                    record = self.model_class.model_validate(dict(row))
+                    add_result(record, row.get('similarity'))
+
+            except Exception as e:
+                logger.warning(f"Semantic search failed: {e}")
+
+        if search_type in ("name", "all"):
+            # Fuzzy name search using trigrams
+            try:
+                enabled_clause = ""
+                if not include_disabled and hasattr(self.model_class, 'enabled'):
+                    enabled_clause = "AND enabled = TRUE"
+
+                user_clause = ""
+                params = [query, limit]
+                if user_id:
+                    user_clause = "AND (user_id = $3 OR user_id IS NULL)"
+                    params.append(user_id)
+
+                sql = f"""
+                    SELECT *, similarity(name, $1) as sim
+                    FROM {self.table_name}
+                    WHERE deleted_at IS NULL
+                      {enabled_clause}
+                      {user_clause}
+                      AND similarity(name, $1) >= 0.3
+                    ORDER BY sim DESC
+                    LIMIT $2
+                """
+
+                rows = await self.db.fetch(sql, *params)
+                for row in rows:
+                    record = self.model_class.model_validate(dict(row))
+                    add_result(record, row.get('sim'))
+
+            except Exception as e:
+                logger.warning(f"Name search failed: {e}")
+
+        if search_type in ("tags", "all"):
+            # Tag-based search (exact match on tag)
+            try:
+                enabled_clause = ""
+                if not include_disabled and hasattr(self.model_class, 'enabled'):
+                    enabled_clause = "AND enabled = TRUE"
+
+                user_clause = ""
+                params = [query.lower(), limit]
+                if user_id:
+                    user_clause = "AND (user_id = $3 OR user_id IS NULL)"
+                    params.append(user_id)
+
+                sql = f"""
+                    SELECT *
+                    FROM {self.table_name}
+                    WHERE deleted_at IS NULL
+                      {enabled_clause}
+                      {user_clause}
+                      AND $1 = ANY(tags)
+                    ORDER BY created_at DESC
+                    LIMIT $2
+                """
+
+                rows = await self.db.fetch(sql, *params)
+                for row in rows:
+                    record = self.model_class.model_validate(dict(row))
+                    add_result(record, None)
+
+            except Exception as e:
+                logger.warning(f"Tags search failed: {e}")
+
+        # Apply limit after merging
+        return results[:limit]
 
     async def get_recent(self, session_id: str, limit: int = 10) -> list[T]:
         """

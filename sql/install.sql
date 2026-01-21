@@ -172,6 +172,8 @@ CREATE TABLE IF NOT EXISTS agents (
     content TEXT NOT NULL,  -- Full YAML content
     version VARCHAR(64) DEFAULT '1.0.0',
     enabled BOOLEAN DEFAULT TRUE,
+    registry_uri VARCHAR(2048),  -- Registry source (NULL = "local")
+    icon VARCHAR(512),           -- Icon URL or emoji
     graph_edges JSONB DEFAULT '[]',
     metadata JSONB DEFAULT '{}',
     tags TEXT[] DEFAULT '{}',
@@ -216,6 +218,78 @@ CREATE INDEX IF NOT EXISTS files_user_id_idx ON files(user_id);
 CREATE INDEX IF NOT EXISTS files_processing_status_idx ON files(processing_status);
 CREATE INDEX IF NOT EXISTS files_mime_type_idx ON files(mime_type);
 CREATE INDEX IF NOT EXISTS files_name_trgm_idx ON files USING GIN (name gin_trgm_ops);
+
+-- Servers (MCP tool server configurations)
+CREATE TABLE IF NOT EXISTS servers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(512) NOT NULL,
+    description TEXT,
+
+    -- Server configuration
+    server_type VARCHAR(64) DEFAULT 'mcp',  -- mcp (local), rest, stdio
+    endpoint VARCHAR(2048),                   -- URL or command for remote/stdio
+    config JSONB DEFAULT '{}',                -- Server-specific configuration
+    enabled BOOLEAN DEFAULT TRUE,
+
+    -- Federation support (future)
+    registry_uri VARCHAR(2048),               -- Parent registry URI (nullable)
+
+    -- Display
+    icon VARCHAR(512),                        -- Icon URL or emoji
+
+    -- System fields
+    graph_edges JSONB DEFAULT '[]',
+    metadata JSONB DEFAULT '{}',
+    tags TEXT[] DEFAULT '{}',
+    embedding VECTOR(1536),
+    user_id VARCHAR(256),
+    tenant_id VARCHAR(256),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    deleted_at TIMESTAMP WITH TIME ZONE
+);
+-- Note: No unique constraint on name - using deterministic IDs from endpoint/name hash
+-- This allows idempotent upserts by ID without conflict issues
+CREATE INDEX IF NOT EXISTS servers_name_idx ON servers(name);
+CREATE INDEX IF NOT EXISTS servers_user_id_idx ON servers(user_id);
+CREATE INDEX IF NOT EXISTS servers_enabled_idx ON servers(enabled);
+CREATE INDEX IF NOT EXISTS servers_server_type_idx ON servers(server_type);
+CREATE INDEX IF NOT EXISTS servers_tags_idx ON servers USING GIN (tags);
+CREATE INDEX IF NOT EXISTS servers_embedding_idx ON servers USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS servers_name_trgm_idx ON servers USING GIN (name gin_trgm_ops);
+
+-- Tools (registered tool definitions)
+CREATE TABLE IF NOT EXISTS tools (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(512) NOT NULL,
+    description TEXT,
+
+    -- Tool configuration
+    server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
+    input_schema JSONB DEFAULT '{}',          -- JSON Schema for parameters
+    enabled BOOLEAN DEFAULT TRUE,
+
+    -- Display
+    icon VARCHAR(512),
+
+    -- System fields
+    graph_edges JSONB DEFAULT '[]',
+    metadata JSONB DEFAULT '{}',
+    tags TEXT[] DEFAULT '{}',
+    embedding VECTOR(1536),
+    user_id VARCHAR(256),
+    tenant_id VARCHAR(256),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    deleted_at TIMESTAMP WITH TIME ZONE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS tools_server_name_unique ON tools(server_id, name) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS tools_user_id_idx ON tools(user_id);
+CREATE INDEX IF NOT EXISTS tools_server_id_idx ON tools(server_id);
+CREATE INDEX IF NOT EXISTS tools_enabled_idx ON tools(enabled);
+CREATE INDEX IF NOT EXISTS tools_tags_idx ON tools USING GIN (tags);
+CREATE INDEX IF NOT EXISTS tools_embedding_idx ON tools USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS tools_name_trgm_idx ON tools USING GIN (name gin_trgm_ops);
 
 -- Agent Time Machine (version history for agents)
 -- Note: No FK constraint on agent_id because we need to preserve history after agent deletion
@@ -296,6 +370,18 @@ CREATE TRIGGER agent_kv_trigger
 AFTER INSERT OR UPDATE ON agents
 FOR EACH ROW EXECUTE FUNCTION update_kv_store();
 
+-- Trigger for servers
+DROP TRIGGER IF EXISTS server_kv_trigger ON servers;
+CREATE TRIGGER server_kv_trigger
+AFTER INSERT OR UPDATE ON servers
+FOR EACH ROW EXECUTE FUNCTION update_kv_store();
+
+-- Trigger for tools
+DROP TRIGGER IF EXISTS tool_kv_trigger ON tools;
+CREATE TRIGGER tool_kv_trigger
+AFTER INSERT OR UPDATE ON tools
+FOR EACH ROW EXECUTE FUNCTION update_kv_store();
+
 -- Auto-update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
@@ -336,6 +422,14 @@ FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 DROP TRIGGER IF EXISTS files_updated_at ON files;
 CREATE TRIGGER files_updated_at BEFORE UPDATE ON files
+FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS servers_updated_at ON servers;
+CREATE TRIGGER servers_updated_at BEFORE UPDATE ON servers
+FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS tools_updated_at ON tools;
+CREATE TRIGGER tools_updated_at BEFORE UPDATE ON tools
 FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- ============================================
@@ -496,6 +590,32 @@ BEGIN
           AND (p_user_id IS NULL OR a.user_id = p_user_id OR a.user_id IS NULL)
           AND 1 - (a.embedding <=> p_query_embedding) >= p_min_similarity
         ORDER BY a.embedding <=> p_query_embedding
+        LIMIT p_limit;
+    ELSIF p_table_name = 'servers' THEN
+        RETURN QUERY
+        SELECT s.id, s.name, s.description as content,
+               1 - (s.embedding <=> p_query_embedding) as similarity,
+               to_jsonb(s) - 'embedding' as data
+        FROM servers s
+        WHERE s.embedding IS NOT NULL
+          AND s.deleted_at IS NULL
+          AND s.enabled = TRUE
+          AND (p_user_id IS NULL OR s.user_id = p_user_id OR s.user_id IS NULL)
+          AND 1 - (s.embedding <=> p_query_embedding) >= p_min_similarity
+        ORDER BY s.embedding <=> p_query_embedding
+        LIMIT p_limit;
+    ELSIF p_table_name = 'tools' THEN
+        RETURN QUERY
+        SELECT t.id, t.name, t.description as content,
+               1 - (t.embedding <=> p_query_embedding) as similarity,
+               to_jsonb(t) - 'embedding' as data
+        FROM tools t
+        WHERE t.embedding IS NOT NULL
+          AND t.deleted_at IS NULL
+          AND t.enabled = TRUE
+          AND (p_user_id IS NULL OR t.user_id = p_user_id OR t.user_id IS NULL)
+          AND 1 - (t.embedding <=> p_query_embedding) >= p_min_similarity
+        ORDER BY t.embedding <=> p_query_embedding
         LIMIT p_limit;
     END IF;
 END;
@@ -676,7 +796,102 @@ CREATE TRIGGER agents_embedding_queue
 AFTER INSERT OR UPDATE OF description, content ON agents
 FOR EACH ROW EXECUTE FUNCTION queue_agent_embedding();
 
+-- Server embedding queue
+CREATE OR REPLACE FUNCTION queue_server_embedding()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.embedding IS NULL AND NEW.description IS NOT NULL THEN
+        INSERT INTO embedding_queue (table_name, record_id, content)
+        VALUES ('servers', NEW.id, COALESCE(NEW.name || ': ', '') || NEW.description);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS servers_embedding_queue ON servers;
+CREATE TRIGGER servers_embedding_queue
+AFTER INSERT OR UPDATE OF description ON servers
+FOR EACH ROW EXECUTE FUNCTION queue_server_embedding();
+
+-- Tool embedding queue
+CREATE OR REPLACE FUNCTION queue_tool_embedding()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.embedding IS NULL AND NEW.description IS NOT NULL THEN
+        INSERT INTO embedding_queue (table_name, record_id, content)
+        VALUES ('tools', NEW.id, COALESCE(NEW.name || ': ', '') || NEW.description);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS tools_embedding_queue ON tools;
+CREATE TRIGGER tools_embedding_queue
+AFTER INSERT OR UPDATE OF description ON tools
+FOR EACH ROW EXECUTE FUNCTION queue_tool_embedding();
+
+-- ============================================
+-- SEED DATA (for testing)
+-- ============================================
+
+-- Test user
+INSERT INTO users (id, name, email, summary, interests, preferred_topics, activity_level, user_id)
+VALUES (
+    'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+    'Test User',
+    'test@example.com',
+    'A test user for development and integration testing. Interested in AI, machine learning, and software development.',
+    ARRAY['artificial intelligence', 'machine learning', 'software development', 'data science'],
+    ARRAY['agents', 'LLMs', 'RAG', 'knowledge graphs'],
+    'active',
+    'test-user'
+)
+ON CONFLICT (email) DO UPDATE SET
+    name = EXCLUDED.name,
+    summary = EXCLUDED.summary,
+    interests = EXCLUDED.interests,
+    preferred_topics = EXCLUDED.preferred_topics,
+    updated_at = NOW();
+
+-- Test projects (stored in ontologies table with entity_type = 'project')
+INSERT INTO ontologies (id, name, description, category, entity_type, properties, tags)
+VALUES
+    (
+        'b1eebc99-9c0b-4ef8-bb6d-6bb9bd380b22',
+        'project-alpha',
+        'Project Alpha is a machine learning pipeline for automated document processing.',
+        'engineering',
+        'project',
+        '{"status": "active", "lead": "sarah-chen", "team_size": 5, "start_date": "2024-01-15", "budget": 150000, "priority": "high"}',
+        ARRAY['ml', 'documents', 'automation']
+    ),
+    (
+        'c2eebc99-9c0b-4ef8-bb6d-6bb9bd380c33',
+        'project-beta',
+        'Project Beta focuses on building a real-time analytics dashboard for business intelligence.',
+        'data',
+        'project',
+        '{"status": "planning", "lead": "john-doe", "team_size": 3, "start_date": "2024-03-01", "budget": 80000, "priority": "medium"}',
+        ARRAY['analytics', 'dashboard', 'bi']
+    ),
+    (
+        'd3eebc99-9c0b-4ef8-bb6d-6bb9bd380d44',
+        'project-gamma',
+        'Project Gamma is an AI-powered customer support chatbot using RAG architecture.',
+        'ai',
+        'project',
+        '{"status": "active", "lead": "jane-smith", "team_size": 4, "start_date": "2024-02-10", "budget": 200000, "priority": "high"}',
+        ARRAY['ai', 'chatbot', 'rag', 'support']
+    )
+ON CONFLICT (name) DO UPDATE SET
+    description = EXCLUDED.description,
+    category = EXCLUDED.category,
+    entity_type = EXCLUDED.entity_type,
+    properties = EXCLUDED.properties,
+    tags = EXCLUDED.tags,
+    updated_at = NOW();
+
 -- ============================================
 -- DONE
 -- ============================================
-SELECT 'REMLight database installed successfully' as status;
+SELECT 'REMLight database installed successfully (with seed data)' as status;

@@ -1,16 +1,15 @@
 /**
  * AppLayout - Main application layout with sidebar
  *
- * Provides the overall structure with collapsible sidebar.
+ * Provides the overall structure with icon rail and expandable panels.
  */
 
-import { useCallback, useState } from "react"
+import { useCallback } from "react"
 import { Sidebar } from "@/components/sidebar"
 import { ChatView } from "@/components/chat"
 import { useSessions } from "@/hooks/use-sessions"
 
 export function AppLayout() {
-  const [isCollapsed, setIsCollapsed] = useState(false)
   const {
     sessions,
     currentSessionId,
@@ -44,26 +43,60 @@ export function AppLayout() {
   }, [setCurrentSession, refresh])
 
   /**
-   * Navigate to settings (placeholder).
+   * Navigate to settings.
    */
   const handleSettings = useCallback(() => {
     // TODO: Implement settings navigation
     console.log("Settings clicked")
   }, [])
 
+  /**
+   * Handle scenario selection.
+   */
+  const handleScenarioSelect = useCallback((scenarioId: string) => {
+    // TODO: Load scenario into chat
+    console.log("Scenario selected:", scenarioId)
+  }, [])
+
+  /**
+   * Handle schema selection.
+   */
+  const handleSchemaSelect = useCallback((schemaId: string) => {
+    // TODO: Open schema editor
+    console.log("Schema selected:", schemaId)
+  }, [])
+
+  /**
+   * Handle new schema creation.
+   */
+  const handleNewSchema = useCallback(() => {
+    // TODO: Open new schema dialog
+    console.log("New schema clicked")
+  }, [])
+
+  /**
+   * Handle ontology page selection.
+   */
+  const handleOntologyPageSelect = useCallback((path: string) => {
+    // TODO: Display ontology page
+    console.log("Ontology page selected:", path)
+  }, [])
+
   return (
     <div className="flex h-screen bg-zinc-50">
-      {/* Sidebar */}
+      {/* Sidebar with icon rail and panels */}
       <Sidebar
         sessions={sessions}
         currentSessionId={currentSessionId}
         isLoading={isLoading}
-        isCollapsed={isCollapsed}
         onSessionSelect={handleSessionSelect}
         onNewChat={handleNewChat}
         onSearch={search}
         onSettings={handleSettings}
-        onToggleCollapse={() => setIsCollapsed(!isCollapsed)}
+        onScenarioSelect={handleScenarioSelect}
+        onSchemaSelect={handleSchemaSelect}
+        onNewSchema={handleNewSchema}
+        onOntologyPageSelect={handleOntologyPageSelect}
       />
 
       {/* Main content */}

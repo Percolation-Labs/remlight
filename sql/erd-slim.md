@@ -44,6 +44,8 @@ erDiagram
         TEXT content
         VARCHAR version
         BOOLEAN enabled
+        VARCHAR registry_uri
+        VARCHAR icon
         VECTOR embedding
         TEXT[] tags
         UUID user_id FK
@@ -101,22 +103,30 @@ Tracks identity, preferences, and ownership of other entities.
 
 Stored agent definitions for the agentic runtime.
 Agents are defined declaratively in YAML and stored in the database for runtime loading.
-The `content` field holds the full YAML spec; `description` is an optional summary for search.
+The `content` field holds the full YAML spec; `description` is embedded for semantic search.
 
-| Column      | Type        | Description                       |
-| ----------- | ----------- | --------------------------------- |
-| id          | UUID        | Primary key                       |
-| name        | VARCHAR     | Unique agent identifier           |
-| description | TEXT        | Optional short description        |
-| content     | TEXT        | Full YAML agent spec              |
-| version     | VARCHAR     | Schema version (default 1.0.0)    |
-| enabled     | BOOLEAN     | Whether agent is active           |
-| embedding   | VECTOR      | Semantic search vector            |
-| tags        | TEXT[]      | Agent categorization tags         |
-| user_id     | UUID        | Owner who created the agent       |
-| created_at  | TIMESTAMPTZ | Agent creation time               |
-| updated_at  | TIMESTAMPTZ | Last configuration update         |
-| deleted_at  | TIMESTAMPTZ | Soft delete timestamp             |
+**Search**: Agents are searchable by name (fuzzy), tags, and semantic search on description.
+
+**Federation**: The `registry_uri` field identifies the source registry for federated agents.
+Local agents use `registry_uri = NULL` or `"local"`. Remote agents store their origin registry URI,
+enabling agent discovery and synchronization across distributed REMLight instances.
+
+| Column       | Type        | Description                            |
+| ------------ | ----------- | -------------------------------------- |
+| id           | UUID        | Deterministic from registry_uri:name   |
+| name         | VARCHAR     | Unique agent identifier                |
+| description  | TEXT        | Optional short description             |
+| content      | TEXT        | Full YAML agent spec                   |
+| version      | VARCHAR     | Schema version (default 1.0.0)         |
+| enabled      | BOOLEAN     | Whether agent is active                |
+| registry_uri | VARCHAR     | Source registry URI (for federation)   |
+| icon         | VARCHAR     | Display icon (URL or emoji)            |
+| embedding    | VECTOR      | Semantic search vector                 |
+| tags         | TEXT[]      | Agent categorization tags              |
+| user_id      | UUID        | Owner who created the agent            |
+| created_at   | TIMESTAMPTZ | Agent creation time                    |
+| updated_at   | TIMESTAMPTZ | Last configuration update              |
+| deleted_at   | TIMESTAMPTZ | Soft delete timestamp                  |
 
 ### sessions
 
@@ -155,6 +165,106 @@ Stores the full conversation history including user inputs, agent responses, and
 | created_at | TIMESTAMPTZ | Message timestamp                           |
 | updated_at | TIMESTAMPTZ | Edit timestamp                              |
 | deleted_at | TIMESTAMPTZ | Soft delete timestamp                       |
+
+## Tool Registry Models
+
+Tables for registering and discovering MCP tool servers and their tools.
+
+**Federation**: Both servers and tools support federation via `registry_uri`. A REMLight instance
+can register remote servers from other registries, enabling distributed tool discovery. When agents
+reference tools from federated servers, the runtime resolves them via the registered endpoint.
+
+```mermaid
+erDiagram
+    servers ||--o{ tools : "provides"
+
+    servers {
+        UUID id PK
+        VARCHAR name
+        TEXT description
+        VARCHAR server_type
+        VARCHAR endpoint
+        JSONB config
+        BOOLEAN enabled
+        VARCHAR registry_uri
+        VARCHAR icon
+        VECTOR embedding
+        TEXT[] tags
+        UUID user_id FK
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+        TIMESTAMPTZ deleted_at
+    }
+
+    tools {
+        UUID id PK
+        VARCHAR name
+        TEXT description
+        UUID server_id FK
+        JSONB input_schema
+        BOOLEAN enabled
+        VARCHAR icon
+        VECTOR embedding
+        TEXT[] tags
+        UUID user_id FK
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+        TIMESTAMPTZ deleted_at
+    }
+```
+
+### servers
+
+MCP tool server registrations for the agentic runtime.
+Servers can be local (built-in), REST endpoints, or stdio-based MCP servers.
+
+**Search**: Servers are searchable by name (fuzzy), tags, and semantic search on description.
+
+**Federation**: The `registry_uri` field identifies servers imported from remote registries.
+Local servers have `registry_uri = NULL`. Federated servers store their origin registry URI,
+enabling server discovery across distributed REMLight instances.
+
+| Column       | Type        | Description                              |
+| ------------ | ----------- | ---------------------------------------- |
+| id           | UUID        | Deterministic from endpoint/name hash    |
+| name         | VARCHAR     | Server display name                      |
+| description  | TEXT        | Server purpose and capabilities          |
+| server_type  | VARCHAR     | Type: mcp (default), rest, stdio         |
+| endpoint     | VARCHAR     | Server URL or command (null for local)   |
+| config       | JSONB       | Additional server configuration          |
+| enabled      | BOOLEAN     | Whether server is active                 |
+| registry_uri | VARCHAR     | Remote registry URI (for federation)     |
+| icon         | VARCHAR     | Display icon                             |
+| embedding    | VECTOR      | Semantic search vector                   |
+| tags         | TEXT[]      | Server categorization tags               |
+| user_id      | UUID        | Owner who registered the server          |
+| created_at   | TIMESTAMPTZ | Registration time                        |
+| updated_at   | TIMESTAMPTZ | Last update                              |
+| deleted_at   | TIMESTAMPTZ | Soft delete timestamp                    |
+
+### tools
+
+Tool definitions provided by registered servers.
+Each tool belongs to a server and defines its input schema for validation.
+
+**Search**: Tools are searchable by name (fuzzy), tags, and semantic search on description.
+This enables agents to discover tools dynamically based on capability descriptions.
+
+| Column       | Type        | Description                              |
+| ------------ | ----------- | ---------------------------------------- |
+| id           | UUID        | Deterministic from server_id:name hash   |
+| name         | VARCHAR     | Tool name (unique per server)            |
+| description  | TEXT        | Tool purpose and usage                   |
+| server_id    | UUID        | Parent server (FK, CASCADE delete)       |
+| input_schema | JSONB       | JSON Schema for tool parameters          |
+| enabled      | BOOLEAN     | Whether tool is active                   |
+| icon         | VARCHAR     | Display icon                             |
+| embedding    | VECTOR      | Semantic search vector                   |
+| tags         | TEXT[]      | Tool categorization tags                 |
+| user_id      | UUID        | Owner                                    |
+| created_at   | TIMESTAMPTZ | Registration time                        |
+| updated_at   | TIMESTAMPTZ | Last update                              |
+| deleted_at   | TIMESTAMPTZ | Soft delete timestamp                    |
 
 ## Knowledge Base Models
 
@@ -250,16 +360,19 @@ chunk ordering within a source document.
 | users → agents      | 1:N  | A user owns many agents          |
 | agents → sessions   | 1:N  | An agent runs many sessions      |
 | sessions → messages | 1:N  | A session contains many messages |
+| servers → tools     | 1:N  | A server provides many tools     |
 
 ## Embeddings
 
 Embeddings are generated when the model has `embedding_field` in `model_config`.
 
-| Table      | Config                       | Source      | Fallback |
-| ---------- | ---------------------------- | ----------- | -------- |
-| ontologies | `embedding_field: True`      | description | content  |
-| resources  | `embedding_field: "content"` | content     | -        |
-| agents     | `embedding_field: True`      | description | content  |
+| Table      | Config                            | Source      | Fallback |
+| ---------- | --------------------------------- | ----------- | -------- |
+| ontologies | `embedding_field: True`           | description | content  |
+| resources  | `embedding_field: "content"`      | content     | -        |
+| agents     | `embedding_field: True`           | description | content  |
+| servers    | `embedding_field: "description"`  | description | -        |
+| tools      | `embedding_field: "description"`  | description | -        |
 
 Tables without `embedding_field` config (users, sessions, messages) do not generate embeddings.
 

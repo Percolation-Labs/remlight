@@ -827,7 +827,7 @@ async def create_agent(
             system_prompt = system_prompt + "\n\n" + properties_prompt
 
     # =========================================================================
-    # TOOL FILTERING
+    # TOOL FILTERING AND RESOLUTION
     # =========================================================================
     # Filter provided tools based on schema.json_schema_extra.tools configuration
     #
@@ -835,11 +835,28 @@ async def create_agent(
     # 1. tools not specified in schema → ALL provided tools available
     # 2. tools: [] (empty list) → NO tools available (agent can't call tools)
     # 3. tools: [{name: "x"}] → only named tools available
+    #
+    # Remote server support:
+    # - Tools can specify a "server" field to load from registered servers
+    # - server: None or "local" → use local tools
+    # - server: "data-service" → load from registered remote server
     # =========================================================================
 
     agent_tools = []
     schema_tools = meta.tools  # List of MCPToolReference or dicts
     has_tool_filter = len(schema_tools) > 0 if schema_tools else False
+
+    # Check if any tools reference remote servers
+    has_remote_tools = False
+    for t in (schema_tools or []):
+        server = None
+        if hasattr(t, "server"):
+            server = t.server
+        elif isinstance(t, dict):
+            server = t.get("server") or t.get("mcp_server")
+        if server and server != "local":
+            has_remote_tools = True
+            break
 
     # Extract allowed tool names from schema (handles both MCPToolReference and dict)
     allowed_tool_names: set[str] = set()
@@ -849,7 +866,12 @@ async def create_agent(
         elif isinstance(t, dict) and "name" in t:  # Plain dict from YAML
             allowed_tool_names.add(t["name"])
 
-    if tools:
+    # If schema has remote tools, use the tool resolver
+    if has_remote_tools and schema_tools:
+        from remlight.agentic.tool_resolver import resolve_tools
+        agent_tools = await resolve_tools(schema_tools, tools, context)
+    elif tools:
+        # Local-only tools path (original behavior for backwards compatibility)
         if isinstance(tools, dict):
             # FastMCP format: {name: FunctionTool}
             # FunctionTool has .fn attribute with the actual callable

@@ -28,6 +28,8 @@ from remlight.api.routers.tools import (
     init_tools,
     get_user_profile,
     format_user_profile,
+    get_project,
+    format_project,
 )
 
 # Module-level MCP instance
@@ -94,6 +96,19 @@ def _register_resources(mcp: FastMCP) -> None:
         if not profile:
             return f"# User Profile Not Found\n\nNo user found with ID: {user_id}"
         return format_user_profile(profile)
+
+    @mcp.resource("project://{project_key}")
+    async def project_resource(project_key: str) -> str:
+        """
+        Load project details by key.
+
+        Returns JSON with project metadata (status, lead, team_size, budget, etc.)
+        TODO: Track project lookups in database for analytics.
+        """
+        project = await get_project(project_key)
+        if not project:
+            return f'{{"error": "Project not found", "project_key": "{project_key}"}}'
+        return format_project(project)
 
     @mcp.resource("rem://status")
     def system_status() -> str:

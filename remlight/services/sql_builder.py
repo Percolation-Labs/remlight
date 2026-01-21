@@ -171,6 +171,9 @@ def build_upsert(
     # Build update clause (exclude conflict field)
     update_fields = [f for f in fields if f != conflict_field]
     update_clauses = [f"{field} = EXCLUDED.{field}" for field in update_fields]
+    # Always clear deleted_at on upsert to "un-delete" soft-deleted records
+    if "deleted_at" not in update_fields:
+        update_clauses.append("deleted_at = NULL")
 
     # Single-line format for easier SQL surgery in repository (embedding injection)
     sql = f"INSERT INTO {table_name} ({', '.join(fields)}) VALUES ({', '.join(placeholders)}) ON CONFLICT ({conflict_field}) DO UPDATE SET {', '.join(update_clauses)}"
@@ -283,6 +286,6 @@ def build_count(
         params.append(value)
         param_idx += 1
 
-    sql = f"SELECT COUNT(*) FROM {table_name} WHERE {' AND '.join(where_clauses)}"
+    sql = f"SELECT COUNT(*) as count FROM {table_name} WHERE {' AND '.join(where_clauses)}"
 
     return sql, params

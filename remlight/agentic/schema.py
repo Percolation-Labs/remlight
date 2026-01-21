@@ -98,28 +98,40 @@ class MCPToolReference(BaseModel):
 
     TOOL SPECIFICATION
     -----------------
-    Currently, only local tools are supported. Tools are identified by name
-    and matched against the tools provided to create_agent().
+    Tools can be loaded from different servers:
 
-    FUTURE: Remote MCP tool URIs (mcp://host/tool) for distributed tools.
+    - server: None or "local"       → Built-in tools from the local MCP server
+    - server: "data-service"        → Tools from registered server "data-service"
+
+    Remote servers are resolved from the database and accessed via:
+    - REST: HTTP calls to the server's endpoint
+    - stdio: MCP protocol over subprocess
 
     Example YAML:
         tools:
           - name: search
             description: Search the knowledge base
           - name: action
+            server: local           # explicit local (same as default)
+          - name: fetch_data
+            server: data-service    # registered remote server
           - name: ask_agent
             description: Delegate to another agent
 
     Attributes:
         name: Tool function name (matches tool.__name__)
-        mcp_server: Optional server identifier (for future remote support)
+        server: Server alias (default "local" for built-in tools)
         description: Optional description override
     """
 
     name: str
-    mcp_server: str | None = None  # Optional: which MCP server provides this tool
+    server: str | None = None  # Server alias (None = "local" = built-in)
     description: str | None = None
+
+    # Backwards compatibility alias
+    @property
+    def mcp_server(self) -> str | None:
+        return self.server
 
 
 class MCPResourceReference(BaseModel):
