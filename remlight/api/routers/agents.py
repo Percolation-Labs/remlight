@@ -56,6 +56,7 @@ class AgentUpsertRequest(BaseModel):
     enabled: bool = Field(default=True, description="Whether the agent is active")
     icon: str | None = Field(default=None, description="Icon URL or emoji")
     tags: list[str] = Field(default_factory=list, description="Classification tags")
+    save_to_file: bool = Field(default=True, description="Also save to schemas/ directory")
 
 
 class AgentUpsertResponse(BaseModel):
@@ -344,11 +345,14 @@ async def get_agent_content(
 
 @router.put("", response_model=AgentUpsertResponse)
 async def upsert_agent(request: AgentUpsertRequest) -> AgentUpsertResponse:
-    """Create or update an agent in the database.
+    """Create or update an agent in the database and optionally filesystem.
 
     The agent name is extracted from the YAML content (json_schema_extra.name).
     If an agent with that name exists, it will be updated.
     Time machine trigger automatically records version history on changes.
+
+    When save_to_file=True (default), also writes to schemas/{name}.yaml.
+    This ensures filesystem-first agents get updated.
     """
     # Parse YAML to extract metadata
     try:
@@ -370,7 +374,7 @@ async def upsert_agent(request: AgentUpsertRequest) -> AgentUpsertResponse:
     existing = await repo.get_by_name(meta.name)
     created = existing is None
 
-    # Create/update agent
+    # Create/update agent in database
     agent = Agent(
         id=existing.id if existing else None,
         name=meta.name,
@@ -383,6 +387,18 @@ async def upsert_agent(request: AgentUpsertRequest) -> AgentUpsertResponse:
     )
 
     await repo.upsert(agent, conflict_field="name" if not existing else "id")
+
+    # Also save to filesystem if requested
+    if request.save_to_file:
+        schemas_dir = get_schemas_dir()
+        schemas_dir.mkdir(parents=True, exist_ok=True)
+        yaml_file = schemas_dir / f"{meta.name}.yaml"
+        try:
+            yaml_file.write_text(request.content)
+            logger.info(f"Saved agent '{meta.name}' to {yaml_file}")
+        except Exception as e:
+            logger.warning(f"Failed to save agent to file: {e}")
+            # Don't fail the request - database save succeeded
 
     return AgentUpsertResponse(
         name=meta.name,

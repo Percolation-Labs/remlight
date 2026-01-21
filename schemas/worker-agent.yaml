@@ -36,17 +36,21 @@ description: |
   - Always respond with natural text after completing work
   - Keep summaries brief but informative
   - Include relevant metrics when applicable
-
 properties:
   answer:
     type: string
     description: Your response describing what you did
-
+  jokes:
+    type: array
+    items:
+      type: string
+    description: List of jokes related to the completed task or to lighten the report.
 json_schema_extra:
   kind: agent
   name: worker-agent
-  version: "1.0.0"
+  version: 1.0.0
   structured_output: false
   tools:
     - name: action
       description: Record task completion and observations
+  tags: []

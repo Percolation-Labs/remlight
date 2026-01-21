@@ -53,13 +53,18 @@ export async function fetchAgentContent(agentName: string): Promise<AgentContent
 }
 
 /**
- * Save agent to the database.
+ * Save agent to the database and optionally filesystem.
  */
-export async function saveAgent(content: string, enabled: boolean = true, tags: string[] = []): Promise<{ name: string; created: boolean } | null> {
+export async function saveAgent(
+  content: string,
+  enabled: boolean = true,
+  tags: string[] = [],
+  saveToFile: boolean = true
+): Promise<{ name: string; created: boolean } | null> {
   try {
     return await apiRequest<{ name: string; version: string; created: boolean; message: string }>("/v1/agents", {
       method: "PUT",
-      body: JSON.stringify({ content, enabled, tags }),
+      body: JSON.stringify({ content, enabled, tags, save_to_file: saveToFile }),
     })
   } catch (error) {
     console.warn("Failed to save agent:", error)

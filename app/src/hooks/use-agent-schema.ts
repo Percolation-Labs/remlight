@@ -125,6 +125,12 @@ export function useAgentSchema(options: UseAgentSchemaOptions = {}): UseAgentSch
     },
   }))
 
+  // Keep a ref to the latest schema for synchronous access (e.g., in toYaml)
+  const schemaRef = useRef<AgentSchemaState>(schema)
+  useEffect(() => {
+    schemaRef.current = schema
+  }, [schema])
+
   // Focus state with timeout
   const [focusState, setFocusState] = useState<FocusState>({
     section: null,
@@ -381,26 +387,29 @@ export function useAgentSchema(options: UseAgentSchemaOptions = {}): UseAgentSch
   }
   const isValid = validationErrors.length === 0
 
-  // Export to YAML string
+  // Export to YAML string - reads from ref for immediate access after patches
   const toYaml = useCallback(() => {
+    // Use schemaRef.current for synchronous access to latest state
+    const currentSchema = schemaRef.current
+
     // Build the YAML object structure
     const yamlObj: Record<string, unknown> = {
       type: "object",
-      description: schema.description,
+      description: currentSchema.description,
     }
 
     // Only include properties if there are any
-    if (Object.keys(schema.properties).length > 0) {
-      yamlObj.properties = schema.properties
+    if (Object.keys(currentSchema.properties).length > 0) {
+      yamlObj.properties = currentSchema.properties
     }
 
     // Only include required if there are any
-    if (schema.required.length > 0) {
-      yamlObj.required = schema.required
+    if (currentSchema.required.length > 0) {
+      yamlObj.required = currentSchema.required
     }
 
     // Build json_schema_extra with clean tool references
-    const tools = schema.metadata.tools.map(tool => {
+    const tools = currentSchema.metadata.tools.map(tool => {
       const t: Record<string, string> = { name: tool.name }
       if (tool.description) t.description = tool.description
       if (tool.server) t.server = tool.server
@@ -408,12 +417,12 @@ export function useAgentSchema(options: UseAgentSchemaOptions = {}): UseAgentSch
     })
 
     yamlObj.json_schema_extra = {
-      kind: schema.metadata.kind,
-      name: schema.metadata.name,
-      version: schema.metadata.version,
-      structured_output: schema.metadata.structured_output,
+      kind: currentSchema.metadata.kind,
+      name: currentSchema.metadata.name,
+      version: currentSchema.metadata.version,
+      structured_output: currentSchema.metadata.structured_output,
       tools,
-      tags: schema.metadata.tags,
+      tags: currentSchema.metadata.tags,
     }
 
     return stringifyYaml(yamlObj, {
@@ -421,7 +430,7 @@ export function useAgentSchema(options: UseAgentSchemaOptions = {}): UseAgentSch
       defaultStringType: "PLAIN",
       defaultKeyType: "PLAIN",
     })
-  }, [schema])
+  }, [])
 
   // Parse YAML and set entire schema state
   const setSchemaFromYaml = useCallback((yaml: string) => {
@@ -458,16 +467,21 @@ export function useAgentSchema(options: UseAgentSchemaOptions = {}): UseAgentSch
   }, [])
 
   // Apply JSON Patch (RFC 6902) operations to schema
+  // IMPORTANT: Updates schemaRef SYNCHRONOUSLY before calling setSchema
+  // so that toYaml() can read the patched value immediately
   const applyJsonPatch = useCallback((patches: Operation[]) => {
-    setSchema((prev) => {
-      try {
-        const cloned = JSON.parse(JSON.stringify(prev))
-        const result = applyPatch(cloned, patches, undefined, false)
-        return result.newDocument as AgentSchemaState
-      } catch {
-        return prev
-      }
-    })
+    try {
+      // Use ref as source of truth for synchronous access
+      const cloned = JSON.parse(JSON.stringify(schemaRef.current))
+      const result = applyPatch(cloned, patches, undefined, false)
+      const newSchema = result.newDocument as AgentSchemaState
+      // Update ref IMMEDIATELY (synchronous) - this is the key fix
+      schemaRef.current = newSchema
+      // Then update React state (async) for re-render
+      setSchema(newSchema)
+    } catch {
+      // Patch failed, don't update anything
+    }
   }, [])
 
   return {

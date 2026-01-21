@@ -123,13 +123,13 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
           agentName: agentName,
         }
 
-        // Handle action tool calls for schema updates
-        // The action data is in the result, not arguments
-        if (actualToolName === "action" && toolEvent.status === "completed" && toolEvent.result) {
+        // Handle tool results that emit action events (action, save_agent, etc.)
+        // Any tool can return _action_event: true with action_type to trigger frontend actions
+        if (toolEvent.status === "completed" && toolEvent.result) {
           const result = toolEvent.result as Record<string, unknown>
-          const actionType = result.action_type as string
-          const payload = result.payload as Record<string, unknown>
-          if (actionType && payload && onActionEvent) {
+          if (result._action_event && result.action_type && onActionEvent) {
+            const actionType = result.action_type as string
+            const payload = (result.payload || {}) as Record<string, unknown>
             onActionEvent(actionType, payload)
           }
         }
