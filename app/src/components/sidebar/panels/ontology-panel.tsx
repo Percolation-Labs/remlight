@@ -15,6 +15,7 @@ import {
   Search,
   Loader2,
   RefreshCw,
+  Download,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -40,6 +41,7 @@ export function OntologyPanel({ onClose, onPageSelect }: OntologyPanelProps) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [isLoading, setIsLoading] = useState(true)
+  const [isImporting, setIsImporting] = useState(false)
 
   useEffect(() => {
     loadOntology()
@@ -48,8 +50,7 @@ export function OntologyPanel({ onClose, onPageSelect }: OntologyPanelProps) {
   const loadOntology = async () => {
     setIsLoading(true)
     try {
-      // TODO: Implement API call to load wiki structure
-      const response = await fetch("/api/ontology/tree")
+      const response = await fetch("/api/v1/ontology/tree")
       if (response.ok) {
         const data = await response.json()
         setNodes(data.nodes || [])
@@ -58,6 +59,27 @@ export function OntologyPanel({ onClose, onPageSelect }: OntologyPanelProps) {
       console.error("Failed to load ontology:", error)
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const importOntology = async () => {
+    setIsImporting(true)
+    try {
+      const response = await fetch("/api/v1/ontology/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}), // Uses default path
+      })
+      if (response.ok) {
+        const data = await response.json()
+        console.log("Import result:", data)
+        // Reload the tree after import
+        await loadOntology()
+      }
+    } catch (error) {
+      console.error("Failed to import ontology:", error)
+    } finally {
+      setIsImporting(false)
     }
   }
 
@@ -137,16 +159,30 @@ export function OntologyPanel({ onClose, onPageSelect }: OntologyPanelProps) {
       icon={<BookMarked className="h-4 w-4" />}
       onClose={onClose}
       actions={
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={loadOntology}
-          className="h-7 w-7 p-0"
-          title="Refresh"
-        >
-          <RefreshCw className={cn("h-3.5 w-3.5", isLoading && "animate-spin")} />
-        </Button>
+        <>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={importOntology}
+            disabled={isImporting}
+            className="h-7 w-7 p-0"
+            title="Import from default path"
+          >
+            <Download className={cn("h-3.5 w-3.5", isImporting && "animate-pulse")} />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={loadOntology}
+            disabled={isLoading}
+            className="h-7 w-7 p-0"
+            title="Refresh"
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", isLoading && "animate-spin")} />
+          </Button>
+        </>
       }
     >
       <div className="flex flex-col h-full">
@@ -175,9 +211,20 @@ export function OntologyPanel({ onClose, onPageSelect }: OntologyPanelProps) {
               <div className="text-center py-8">
                 <BookMarked className="h-8 w-8 text-zinc-200 mx-auto mb-2" />
                 <p className="text-xs text-zinc-400">No ontology loaded</p>
-                <p className="text-[10px] text-zinc-400 mt-1">
-                  Configure wiki mount in settings
+                <p className="text-[10px] text-zinc-400 mt-1 mb-3">
+                  Click import to load from default path
                 </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={importOntology}
+                  disabled={isImporting}
+                  className="text-xs gap-1"
+                >
+                  <Download className="h-3 w-3" />
+                  {isImporting ? "Importing..." : "Import Ontology"}
+                </Button>
               </div>
             ) : (
               nodes.map((node) => renderNode(node))

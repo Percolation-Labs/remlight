@@ -43,6 +43,7 @@ from remlight.api.routers.sessions import router as sessions_router, init_sessio
 from remlight.api.routers.models import router as models_router
 from remlight.api.routers.servers import router as servers_router
 from remlight.api.routers.tools_registry import router as tools_registry_router
+from remlight.api.routers.ontology import router as ontology_router
 
 # Import MCP server
 from remlight.api.mcp_main import get_mcp_server, init_mcp
@@ -103,6 +104,7 @@ def create_app() -> FastAPI:
     app.include_router(models_router, prefix="/api/v1")
     app.include_router(servers_router, prefix="/api/v1")
     app.include_router(tools_registry_router, prefix="/api/v1")
+    app.include_router(ontology_router, prefix="/api/v1")
 
     # Health check
     @app.get("/health")
@@ -129,6 +131,7 @@ def create_app() -> FastAPI:
                 "models": "/api/v1/models",
                 "servers": "/api/v1/servers",
                 "tools": "/api/v1/tools",
+                "ontology": "/api/v1/ontology",
                 "mcp": "/api/v1/mcp",
                 "docs": "/docs",
             },

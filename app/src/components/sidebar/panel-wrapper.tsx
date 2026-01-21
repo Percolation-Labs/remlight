@@ -4,7 +4,7 @@
  * Provides consistent header and layout for all panels.
  */
 
-import { X } from "lucide-react"
+import { ChevronLeft } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import type { ReactNode } from "react"
 
@@ -41,7 +41,7 @@ export function PanelWrapper({
             className="h-7 w-7 p-0 text-zinc-400 hover:text-zinc-600"
             title="Close panel"
           >
-            <X className="h-3.5 w-3.5" />
+            <ChevronLeft className="h-4 w-4" />
           </Button>
         </div>
       </div>

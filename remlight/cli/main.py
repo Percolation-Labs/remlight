@@ -326,7 +326,7 @@ async def _ingest_async(path: str, table: str, pattern: str, dry_run: bool):
                         metadata=properties,
                     )
 
-                await repo.upsert(record)
+                await repo.upsert(record, conflict_field="name")
 
                 processed += 1
                 click.echo(f"  ✓ {entity_key}")
