@@ -101,6 +101,16 @@ curl -X POST http://localhost:8001/api/v1/tools/search \
   -d '{"query": "SEARCH declarative agents IN ontologies", "limit": 5}'
 ```
 
+## React App
+
+```bash
+cd app
+npm install
+npm run dev
+```
+
+Open http://localhost:3000 - connects to API at localhost:8001.
+
 ## Phoenix Tracing
 
 When running with Docker, traces are automatically sent to Phoenix:
