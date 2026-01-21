@@ -65,6 +65,17 @@ async def lifespan(app: FastAPI):
     init_sessions(db)
     init_mcp(db)
 
+    # Auto-register tools if enabled
+    from remlight.settings import settings
+    if settings.tools.auto_register:
+        from loguru import logger
+        from remlight.services.registration import register_project_tools
+        try:
+            stats = await register_project_tools(force=False, generate_embeddings=False)
+            logger.info(f"Auto-registered tools: {stats}")
+        except Exception as e:
+            logger.warning(f"Tool auto-registration failed: {e}")
+
     yield
 
     # Cleanup

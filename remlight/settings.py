@@ -63,12 +63,19 @@ class OTELSettings(BaseModel):
     export_timeout: int = int(os.getenv("OTEL__EXPORT_TIMEOUT", "30000"))
 
 
+class ToolsSettings(BaseModel):
+    """Tool registration settings."""
+
+    auto_register: bool = os.getenv("TOOLS__AUTO_REGISTER", "true").lower() == "true"
+
+
 class Settings(BaseModel):
     """Application settings."""
 
     postgres: PostgresSettings = PostgresSettings()
     llm: LLMSettings = LLMSettings()
     otel: OTELSettings = OTELSettings()
+    tools: ToolsSettings = ToolsSettings()
     environment: str = os.getenv("ENVIRONMENT", "development")
 
 

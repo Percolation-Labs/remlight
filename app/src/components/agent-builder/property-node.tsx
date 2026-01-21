@@ -15,7 +15,6 @@ import {
   Trash2,
   Edit2,
 } from "lucide-react"
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import type { PropertyDefinition } from "@/types/agent-schema"
@@ -30,6 +29,7 @@ interface PropertyNodeProps {
   onEdit?: (path: string) => void
   onRemove?: (path: string) => void
   className?: string
+  defaultCollapsed?: boolean
 }
 
 const TYPE_ICONS: Record<PropertyDefinition["type"], typeof Type> = {
@@ -60,8 +60,9 @@ export function PropertyNode({
   onEdit,
   onRemove,
   className,
+  defaultCollapsed = true,
 }: PropertyNodeProps) {
-  const [isOpen, setIsOpen] = useState(depth < 2)
+  const [isOpen, setIsOpen] = useState(!defaultCollapsed)
   const nodeRef = useRef<HTMLDivElement>(null)
   const [isFlashing, setIsFlashing] = useState(false)
 
@@ -227,6 +228,7 @@ export function PropertyNode({
                 isRequired={definition.required?.includes(childName)}
                 onEdit={onEdit}
                 onRemove={onRemove}
+                defaultCollapsed={defaultCollapsed}
               />
             ))}
           {definition.type === "array" && definition.items && (
@@ -240,6 +242,7 @@ export function PropertyNode({
                 focusedPath={focusedPath}
                 onEdit={onEdit}
                 onRemove={onRemove}
+                defaultCollapsed={defaultCollapsed}
               />
             </div>
           )}

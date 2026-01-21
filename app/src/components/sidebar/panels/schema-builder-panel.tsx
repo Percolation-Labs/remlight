@@ -6,7 +6,7 @@
 
 import { useState, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
-import { Boxes, Plus, FileJson, ChevronRight, Loader2, ExternalLink } from "lucide-react"
+import { Boxes, Plus, ChevronRight, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { PanelWrapper } from "../panel-wrapper"
@@ -28,8 +28,6 @@ interface SchemaBuilderPanelProps {
 
 export function SchemaBuilderPanel({
   onClose,
-  onSchemaSelect,
-  onNewSchema,
 }: SchemaBuilderPanelProps) {
   const navigate = useNavigate()
   const [schemas, setSchemas] = useState<Schema[]>([])
@@ -79,6 +77,7 @@ export function SchemaBuilderPanel({
       title="Schema Builder"
       icon={<Boxes className="h-4 w-4" />}
       onClose={onClose}
+      width="wider"
       actions={
         <Button
           type="button"
@@ -95,22 +94,13 @@ export function SchemaBuilderPanel({
       <div className="flex flex-col h-full">
         {/* Quick actions */}
         <div className="p-3 border-b border-zinc-100">
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={handleNewSchema}
-              className="flex flex-col items-center gap-1.5 p-3 rounded-lg border border-dashed border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50 transition-colors"
-            >
-              <Plus className="h-5 w-5 text-zinc-400" />
-              <span className="text-xs text-zinc-600">New Agent</span>
-            </button>
-            <button
-              onClick={() => navigate("/agent-builder")}
-              className="flex flex-col items-center gap-1.5 p-3 rounded-lg border border-dashed border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50 transition-colors"
-            >
-              <ExternalLink className="h-5 w-5 text-zinc-400" />
-              <span className="text-xs text-zinc-600">Open Builder</span>
-            </button>
-          </div>
+          <button
+            onClick={handleNewSchema}
+            className="w-full flex items-center justify-center gap-2 p-3 rounded-lg border border-dashed border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50 transition-colors"
+          >
+            <Plus className="h-5 w-5 text-zinc-400" />
+            <span className="text-xs text-zinc-600">Create New Agent</span>
+          </button>
         </div>
 
         {/* Schema list */}

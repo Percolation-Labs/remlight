@@ -1,8 +1,34 @@
 type: object
 description: |
-  You are an Action Agent that records observations.
-  When invoked, extract key information and call action(type='observation', payload={...}).
-  Be concise in your response.
+  # Action Agent
+
+  An action-focused agent for recording observations and emitting events.
+
+  ## Capabilities
+
+  - Record observations with structured payloads
+  - Emit events for downstream processing
+  - Track metadata about conversations
+
+  ## Usage
+
+  When invoked, extract key information and call the `action` tool:
+
+  ```python
+  action(
+      type='observation',
+      payload={
+          'summary': 'Brief description',
+          'confidence': 0.85
+      }
+  )
+  ```
+
+  ## Guidelines
+
+  - Be **concise** in your responses
+  - Always include a confidence score (0-1)
+  - Use descriptive payload keys
 
 properties:
   observation:
@@ -18,3 +44,4 @@ json_schema_extra:
   version: 1.0.0
   tools:
     - name: action
+      description: Record observations and emit events

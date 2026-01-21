@@ -4,13 +4,15 @@
  * Contains all schema sections with focus highlighting and editing support.
  */
 
+import { useState } from "react"
+import { Download, Check } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { ToolsSection, SystemPromptSection, PropertiesSection } from "./sections"
 import type {
   AgentSchemaState,
   FocusState,
   ToolReference,
-  PropertyDefinition,
 } from "@/types/agent-schema"
 
 interface SchemaPreviewPanelProps {
@@ -22,6 +24,7 @@ interface SchemaPreviewPanelProps {
   onEditProperty?: (path: string) => void
   onRemoveProperty?: (path: string) => void
   onAddProperty?: () => void
+  onExportYaml?: () => string
 }
 
 export function SchemaPreviewPanel({
@@ -33,7 +36,32 @@ export function SchemaPreviewPanel({
   onEditProperty,
   onRemoveProperty,
   onAddProperty,
+  onExportYaml,
 }: SchemaPreviewPanelProps) {
+  const [copied, setCopied] = useState(false)
+
+  const handleExport = async () => {
+    if (!onExportYaml) return
+
+    const yaml = onExportYaml()
+
+    // Copy to clipboard
+    try {
+      await navigator.clipboard.writeText(yaml)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (e) {
+      // Fallback: download as file
+      const blob = new Blob([yaml], { type: "text/yaml" })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `${schema.metadata.name || "agent"}.yaml`
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+  }
+
   return (
     <div className="flex flex-col h-full bg-zinc-50">
       {/* Header */}
@@ -45,17 +73,34 @@ export function SchemaPreviewPanel({
           <p className="text-[10px] text-zinc-400">v{schema.metadata.version}</p>
         </div>
         <div className="flex items-center gap-2">
-          {schema.metadata.structured_output && (
-            <span className="text-[10px] px-2 py-0.5 bg-violet-100 text-violet-600 rounded">
-              Structured Output
-            </span>
+          {onExportYaml && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={handleExport}
+              className="h-7 gap-1 text-xs"
+              title="Export YAML (copy to clipboard)"
+            >
+              {copied ? (
+                <>
+                  <Check className="h-3.5 w-3.5 text-green-500" />
+                  Copied
+                </>
+              ) : (
+                <>
+                  <Download className="h-3.5 w-3.5" />
+                  Export (Clipboard)
+                </>
+              )}
+            </Button>
           )}
         </div>
       </div>
 
       {/* Sections */}
       <ScrollArea className="flex-1">
-        <div className="p-4 space-y-4">
+        <div className="p-4 pb-16 space-y-4" style={{ width: "100%", boxSizing: "border-box" }}>
           {/* Tools Section */}
           <ToolsSection
             tools={schema.metadata.tools}
@@ -98,6 +143,20 @@ export function SchemaPreviewPanel({
               <div>
                 <label className="text-zinc-500">Version</label>
                 <p className="font-medium text-zinc-700">{schema.metadata.version}</p>
+              </div>
+              <div>
+                <label className="text-zinc-500">Output Mode</label>
+                <p className="font-medium">
+                  {schema.metadata.structured_output ? (
+                    <span className="px-1.5 py-0.5 bg-violet-100 text-violet-600 rounded">
+                      Structured (JSON)
+                    </span>
+                  ) : (
+                    <span className="px-1.5 py-0.5 bg-zinc-100 text-zinc-600 rounded">
+                      Conversational
+                    </span>
+                  )}
+                </p>
               </div>
               <div className="col-span-2">
                 <label className="text-zinc-500">Tags</label>

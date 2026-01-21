@@ -14,6 +14,13 @@ interface PanelWrapperProps {
   onClose: () => void
   actions?: ReactNode
   children: ReactNode
+  width?: "default" | "wide" | "wider"
+}
+
+const WIDTH_CLASSES = {
+  default: "w-72",
+  wide: "w-80",
+  wider: "w-[420px]",
 }
 
 export function PanelWrapper({
@@ -22,9 +29,10 @@ export function PanelWrapper({
   onClose,
   actions,
   children,
+  width = "default",
 }: PanelWrapperProps) {
   return (
-    <div className="w-64 border-r border-zinc-200 bg-white flex flex-col h-full">
+    <div className={`${WIDTH_CLASSES[width]} border-r border-zinc-200 bg-white flex flex-col h-full`}>
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-zinc-100">
         <div className="flex items-center gap-2">

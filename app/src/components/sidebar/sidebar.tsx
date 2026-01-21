@@ -4,7 +4,7 @@
  * Contains icon rail navigation and expandable panels.
  */
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { NavRail, type PanelType } from "./nav-rail"
 import {
   ChatHistoryPanel,
@@ -18,6 +18,7 @@ interface SidebarProps {
   sessions: Session[]
   currentSessionId: string | null
   isLoading?: boolean
+  initialPanel?: PanelType | null
   onSessionSelect: (sessionId: string) => void
   onNewChat: () => void
   onSearch?: (query: string) => void
@@ -32,6 +33,7 @@ export function Sidebar({
   sessions,
   currentSessionId,
   isLoading,
+  initialPanel,
   onSessionSelect,
   onNewChat,
   onSearch,
@@ -41,7 +43,14 @@ export function Sidebar({
   onNewSchema,
   onOntologyPageSelect,
 }: SidebarProps) {
-  const [activePanel, setActivePanel] = useState<PanelType | null>("chat")
+  const [activePanel, setActivePanel] = useState<PanelType | null>(initialPanel ?? "chat")
+
+  // Update panel when initialPanel changes (e.g., from URL param)
+  useEffect(() => {
+    if (initialPanel !== undefined) {
+      setActivePanel(initialPanel)
+    }
+  }, [initialPanel])
 
   const handlePanelSelect = (panel: PanelType) => {
     // Toggle panel if clicking the same one

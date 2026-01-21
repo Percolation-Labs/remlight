@@ -5,7 +5,7 @@
  */
 
 import { useState } from "react"
-import { Braces, Plus } from "lucide-react"
+import { Braces, Plus, ChevronsUpDown, ChevronsDownUp } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { PropertyNode } from "../property-node"
 import { cn } from "@/lib/utils"
@@ -33,6 +33,8 @@ export function PropertiesSection({
   onAddProperty,
 }: PropertiesSectionProps) {
   const propertyCount = Object.keys(properties).length
+  const [allCollapsed, setAllCollapsed] = useState(true)
+  const [key, setKey] = useState(0) // Force re-render to reset collapsed state
 
   return (
     <div
@@ -49,16 +51,37 @@ export function PropertiesSection({
           <h3 className="text-sm font-medium text-zinc-800">Output Schema</h3>
           <span className="text-xs text-zinc-400">({propertyCount} fields)</span>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={onAddProperty}
-          className="h-7 gap-1 text-xs"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Add Field
-        </Button>
+        <div className="flex items-center gap-1">
+          {propertyCount > 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setAllCollapsed(!allCollapsed)
+                setKey(k => k + 1) // Force re-render
+              }}
+              className="h-7 w-7 p-0"
+              title={allCollapsed ? "Expand all" : "Collapse all"}
+            >
+              {allCollapsed ? (
+                <ChevronsUpDown className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronsDownUp className="h-3.5 w-3.5" />
+              )}
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onAddProperty}
+            className="h-7 gap-1 text-xs"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add Field
+          </Button>
+        </div>
       </div>
 
       {/* Focus message */}
@@ -79,7 +102,7 @@ export function PropertiesSection({
             </p>
           </div>
         ) : (
-          <div className="space-y-1.5">
+          <div className="space-y-1.5" key={key}>
             {Object.entries(properties).map(([name, definition]) => (
               <PropertyNode
                 key={name}
@@ -91,6 +114,7 @@ export function PropertiesSection({
                 isRequired={required.includes(name)}
                 onEdit={onEditProperty}
                 onRemove={onRemoveProperty}
+                defaultCollapsed={allCollapsed}
               />
             ))}
           </div>

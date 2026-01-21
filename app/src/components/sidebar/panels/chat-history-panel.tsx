@@ -5,7 +5,6 @@
  */
 
 import { MessageSquare, Plus } from "lucide-react"
-import { Button } from "@/components/ui/button"
 import { PanelWrapper } from "../panel-wrapper"
 import { SessionList } from "../session-list"
 import type { Session } from "@/types/chat"
@@ -34,26 +33,29 @@ export function ChatHistoryPanel({
       title="Chat History"
       icon={<MessageSquare className="h-4 w-4" />}
       onClose={onClose}
-      actions={
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={onNewChat}
-          className="h-7 gap-1 text-xs"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          New
-        </Button>
-      }
+      width="wide"
     >
-      <SessionList
-        sessions={sessions}
-        currentSessionId={currentSessionId}
-        isLoading={isLoading}
-        onSessionSelect={onSessionSelect}
-        onSearch={onSearch}
-      />
+      <div className="flex flex-col h-full">
+        {/* New Chat button */}
+        <div className="p-3 border-b border-zinc-100">
+          <button
+            onClick={onNewChat}
+            className="w-full flex items-center justify-center gap-2 p-3 rounded-lg border border-dashed border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50 transition-colors"
+          >
+            <Plus className="h-5 w-5 text-zinc-400" />
+            <span className="text-xs text-zinc-600">Start New Chat</span>
+          </button>
+        </div>
+
+        {/* Session list */}
+        <SessionList
+          sessions={sessions}
+          currentSessionId={currentSessionId}
+          isLoading={isLoading}
+          onSessionSelect={onSessionSelect}
+          onSearch={onSearch}
+        />
+      </div>
     </PanelWrapper>
   )
 }

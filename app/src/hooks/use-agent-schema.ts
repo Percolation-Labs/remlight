@@ -5,6 +5,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from "react"
+import { stringify as stringifyYaml } from "yaml"
 import type {
   AgentSchemaState,
   FocusState,
@@ -13,7 +14,6 @@ import type {
   PropertyDefinition,
   ToolReference,
   UserSchemaEdit,
-  createEmptySchema,
 } from "@/types/agent-schema"
 
 export interface UseAgentSchemaOptions {
@@ -125,7 +125,7 @@ export function useAgentSchema(options: UseAgentSchemaOptions = {}): UseAgentSch
   const [focusState, setFocusState] = useState<FocusState>({
     section: null,
   })
-  const focusTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const focusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Clear focus timeout on unmount
   useEffect(() => {
@@ -348,37 +348,44 @@ export function useAgentSchema(options: UseAgentSchemaOptions = {}): UseAgentSch
 
   // Export to YAML string
   const toYaml = useCallback(() => {
-    const yamlObj = {
+    // Build the YAML object structure
+    const yamlObj: Record<string, unknown> = {
       type: "object",
       description: schema.description,
-      properties: schema.properties,
-      required: schema.required,
-      json_schema_extra: schema.metadata,
     }
 
-    // Simple YAML serialization (could use js-yaml for production)
-    const lines: string[] = []
-    lines.push("type: object")
-    lines.push(`description: |`)
-    schema.description.split("\n").forEach((line) => {
-      lines.push(`  ${line}`)
-    })
-    lines.push("")
-    lines.push("properties:")
-    // ... simplified, would use proper YAML library
-    lines.push("")
-    lines.push("json_schema_extra:")
-    lines.push(`  kind: agent`)
-    lines.push(`  name: ${schema.metadata.name}`)
-    lines.push(`  version: "${schema.metadata.version}"`)
-    lines.push(`  structured_output: ${schema.metadata.structured_output}`)
-    lines.push(`  tools:`)
-    schema.metadata.tools.forEach((tool) => {
-      lines.push(`    - name: ${tool.name}`)
-    })
-    lines.push(`  tags: [${schema.metadata.tags.join(", ")}]`)
+    // Only include properties if there are any
+    if (Object.keys(schema.properties).length > 0) {
+      yamlObj.properties = schema.properties
+    }
 
-    return lines.join("\n")
+    // Only include required if there are any
+    if (schema.required.length > 0) {
+      yamlObj.required = schema.required
+    }
+
+    // Build json_schema_extra with clean tool references
+    const tools = schema.metadata.tools.map(tool => {
+      const t: Record<string, string> = { name: tool.name }
+      if (tool.description) t.description = tool.description
+      if (tool.server) t.server = tool.server
+      return t
+    })
+
+    yamlObj.json_schema_extra = {
+      kind: schema.metadata.kind,
+      name: schema.metadata.name,
+      version: schema.metadata.version,
+      structured_output: schema.metadata.structured_output,
+      tools,
+      tags: schema.metadata.tags,
+    }
+
+    return stringifyYaml(yamlObj, {
+      lineWidth: 100,
+      defaultStringType: "PLAIN",
+      defaultKeyType: "PLAIN",
+    })
   }, [schema])
 
   return {

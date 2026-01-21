@@ -2,6 +2,7 @@
  * OntologyPanel - Wiki/Ontology browser panel
  *
  * Mounts and browses the wiki/ontology structure.
+ * Clicking a page triggers onPageSelect to show content in main window.
  */
 
 import { useState, useEffect } from "react"
@@ -100,6 +101,7 @@ export function OntologyPanel({ onClose, onPageSelect }: OntologyPanelProps) {
       toggleExpand(node.id)
     } else {
       setSelectedPath(node.path)
+      // Notify parent to show content in main window
       onPageSelect?.(node.path)
     }
   }
@@ -158,6 +160,7 @@ export function OntologyPanel({ onClose, onPageSelect }: OntologyPanelProps) {
       title="Ontology"
       icon={<BookMarked className="h-4 w-4" />}
       onClose={onClose}
+      width="wide"
       actions={
         <>
           <Button

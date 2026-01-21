@@ -2,10 +2,12 @@
  * SystemPromptSection - Editable system prompt section for agent builder
  *
  * Displays and allows editing of the agent's system prompt (description).
+ * Uses collapsed/expanded toggle instead of scroll for better UX.
  */
 
 import { useState, useRef, useEffect } from "react"
-import { FileText, Check, X } from "lucide-react"
+import ReactMarkdown from "react-markdown"
+import { FileText, Check, X, ChevronDown, ChevronUp } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
@@ -23,6 +25,7 @@ export function SystemPromptSection({
   onChange,
 }: SystemPromptSectionProps) {
   const [isEditing, setIsEditing] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(false)
   const [editValue, setEditValue] = useState(description)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -70,10 +73,13 @@ export function SystemPromptSection({
     }
   }
 
+  // Check if content is long enough to need expand/collapse
+  const isLongContent = description.length > 500 || description.split("\n").length > 10
+
   return (
     <div
       className={cn(
-        "rounded-lg border transition-all duration-200",
+        "rounded-lg border transition-all duration-200 overflow-hidden",
         isFocused ? "border-blue-300 ring-1 ring-blue-100" : "border-zinc-200",
         isEditing && "border-amber-300 ring-1 ring-amber-100",
         "bg-white"
@@ -85,38 +91,61 @@ export function SystemPromptSection({
           <FileText className="h-4 w-4 text-zinc-500" />
           <h3 className="text-sm font-medium text-zinc-800">System Prompt</h3>
         </div>
-        {!isEditing ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => setIsEditing(true)}
-            className="h-7 text-xs"
-          >
-            Edit
-          </Button>
-        ) : (
-          <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1">
+          {!isEditing && isLongContent && (
             <Button
               type="button"
               variant="ghost"
               size="sm"
-              onClick={handleCancel}
-              className="h-7 w-7 p-0"
+              onClick={() => setIsExpanded(!isExpanded)}
+              className="h-7 gap-1 text-xs text-zinc-500"
             >
-              <X className="h-3.5 w-3.5" />
+              {isExpanded ? (
+                <>
+                  <ChevronUp className="h-3.5 w-3.5" />
+                  Collapse
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="h-3.5 w-3.5" />
+                  Expand
+                </>
+              )}
             </Button>
+          )}
+          {!isEditing ? (
             <Button
               type="button"
               variant="ghost"
               size="sm"
-              onClick={handleSave}
-              className="h-7 w-7 p-0 text-green-600"
+              onClick={() => setIsEditing(true)}
+              className="h-7 text-xs"
             >
-              <Check className="h-3.5 w-3.5" />
+              Edit
             </Button>
-          </div>
-        )}
+          ) : (
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={handleCancel}
+                className="h-7 w-7 p-0"
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={handleSave}
+                className="h-7 w-7 p-0 text-green-600"
+              >
+                <Check className="h-3.5 w-3.5" />
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Focus message */}
@@ -145,14 +174,17 @@ export function SystemPromptSection({
           </div>
         ) : description ? (
           <div
-            className="text-sm text-zinc-700 whitespace-pre-wrap cursor-pointer hover:bg-zinc-50 p-2 -m-2 rounded-md transition-colors"
+            className={cn(
+              "prose prose-sm prose-zinc cursor-pointer hover:bg-zinc-50/50 rounded-md transition-colors [&>*]:break-words",
+              !isExpanded && isLongContent && "max-h-[180px] overflow-hidden"
+            )}
             onClick={() => setIsEditing(true)}
           >
-            {description}
+            <ReactMarkdown>{description}</ReactMarkdown>
           </div>
         ) : (
           <div
-            className="text-sm text-zinc-400 italic cursor-pointer hover:bg-zinc-50 p-2 -m-2 rounded-md transition-colors"
+            className="text-sm text-zinc-400 italic cursor-pointer hover:bg-zinc-50 p-2 rounded-md transition-colors"
             onClick={() => setIsEditing(true)}
           >
             Click to add a system prompt...

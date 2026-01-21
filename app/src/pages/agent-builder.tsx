@@ -14,7 +14,8 @@ export function AgentBuilderPage() {
   const navigate = useNavigate()
 
   const handleBack = () => {
-    navigate("/")
+    // Go to home with query param to open schema panel
+    navigate("/?panel=schema")
   }
 
   return (

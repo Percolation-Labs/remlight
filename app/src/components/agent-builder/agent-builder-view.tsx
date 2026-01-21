@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react"
+import { parse as parseYaml } from "yaml"
 import { SchemaPreviewPanel } from "./schema-preview-panel"
 import { ChatPanel } from "./chat-panel"
 import { useAgentSchema } from "@/hooks/use-agent-schema"
@@ -14,106 +15,93 @@ import type { SchemaUpdatePayload, SchemaFocusPayload, UserSchemaEdit, AgentSche
 
 interface AgentBuilderViewProps {
   initialAgentName?: string
+  onExportYaml?: (yaml: string) => void
+}
+
+// Valid property types
+const VALID_TYPES = ["string", "number", "integer", "boolean", "array", "object"] as const
+type ValidType = typeof VALID_TYPES[number]
+
+/**
+ * Recursively convert parsed YAML properties to PropertyDefinition.
+ */
+function convertProperties(props: Record<string, unknown> | undefined): Record<string, PropertyDefinition> {
+  if (!props || typeof props !== "object") return {}
+
+  const result: Record<string, PropertyDefinition> = {}
+
+  for (const [name, value] of Object.entries(props)) {
+    if (value && typeof value === "object") {
+      const prop = value as Record<string, unknown>
+      const rawType = String(prop.type || "string")
+      const propType: ValidType = VALID_TYPES.includes(rawType as ValidType)
+        ? (rawType as ValidType)
+        : "string"
+
+      result[name] = {
+        type: propType,
+        description: prop.description ? String(prop.description) : undefined,
+        enum: Array.isArray(prop.enum) ? prop.enum.map(String) : undefined,
+        minimum: typeof prop.minimum === "number" ? prop.minimum : undefined,
+        maximum: typeof prop.maximum === "number" ? prop.maximum : undefined,
+        default: prop.default,
+        properties: prop.properties ? convertProperties(prop.properties as Record<string, unknown>) : undefined,
+        items: prop.items ? convertProperties({ item: prop.items })["item"] : undefined,
+        required: Array.isArray(prop.required) ? prop.required.map(String) : undefined,
+      }
+    }
+  }
+
+  return result
 }
 
 /**
- * Parse YAML content to extract schema state.
- * Simple parser for agent YAML format.
+ * Parse YAML content to extract schema state using proper YAML parser.
  */
-function parseAgentYaml(content: string): Partial<AgentSchemaState> | null {
+function parseAgentYamlContent(content: string): Partial<AgentSchemaState> | null {
   try {
-    // Extract description (multiline string after "description: |" or "description:")
-    const descMatch = content.match(/description:\s*\|?\s*\n([\s\S]*?)(?=\n\w|\nproperties:|\nrequired:|\njson_schema_extra:)/i)
-    let description = ""
-    if (descMatch) {
-      // Remove leading indentation from description
-      description = descMatch[1]
-        .split("\n")
-        .map(line => line.replace(/^  /, ""))
-        .join("\n")
-        .trim()
-    }
+    const parsed = parseYaml(content) as Record<string, unknown>
 
-    // Extract json_schema_extra section
-    const metaMatch = content.match(/json_schema_extra:\s*\n([\s\S]*?)(?=\n[^\s]|$)/i)
+    // Extract description (system prompt)
+    const description = typeof parsed.description === "string" ? parsed.description : ""
+
+    // Extract json_schema_extra (metadata)
+    const extra = (parsed.json_schema_extra || {}) as Record<string, unknown>
+
+    // Convert tools
+    const rawTools = Array.isArray(extra.tools) ? extra.tools : []
+    const tools: ToolReference[] = rawTools.map((t: unknown) => {
+      if (typeof t === "object" && t !== null) {
+        const tool = t as Record<string, unknown>
+        return {
+          name: String(tool.name || ""),
+          description: tool.description ? String(tool.description) : undefined,
+          server: tool.server ? String(tool.server) : undefined,
+        }
+      }
+      return { name: String(t) }
+    })
+
+    // Convert tags
+    const rawTags = Array.isArray(extra.tags) ? extra.tags : []
+    const tags = rawTags.map((t: unknown) => String(t))
+
     const metadata: AgentSchemaState["metadata"] = {
       kind: "agent",
-      name: "",
-      version: "1.0.0",
-      tools: [],
+      name: extra.name ? String(extra.name) : "",
+      version: extra.version ? String(extra.version) : "1.0.0",
+      tools,
       resources: [],
-      structured_output: false,
-      tags: [],
-    }
-
-    if (metaMatch) {
-      const metaSection = metaMatch[1]
-
-      // Extract name
-      const nameMatch = metaSection.match(/name:\s*(.+)/i)
-      if (nameMatch) metadata.name = nameMatch[1].trim()
-
-      // Extract version
-      const versionMatch = metaSection.match(/version:\s*["']?([^"'\n]+)["']?/i)
-      if (versionMatch) metadata.version = versionMatch[1].trim()
-
-      // Extract structured_output
-      const structuredMatch = metaSection.match(/structured_output:\s*(true|false)/i)
-      if (structuredMatch) metadata.structured_output = structuredMatch[1].toLowerCase() === "true"
-
-      // Extract tools
-      const toolsMatch = metaSection.match(/tools:\s*\n((?:\s+-[^\n]+\n?)+)/i)
-      if (toolsMatch) {
-        const toolLines = toolsMatch[1].match(/-\s*name:\s*(\S+)/gi) || []
-        metadata.tools = toolLines.map(line => {
-          const name = line.match(/-\s*name:\s*(\S+)/i)?.[1] || ""
-          return { name, description: "" } as ToolReference
-        })
-      }
-
-      // Extract tags
-      const tagsMatch = metaSection.match(/tags:\s*\[([^\]]*)\]/i)
-      if (tagsMatch) {
-        metadata.tags = tagsMatch[1].split(",").map(t => t.trim().replace(/["']/g, "")).filter(Boolean)
-      }
+      structured_output: extra.structured_output === true,
+      tags,
     }
 
     // Extract properties
-    const properties: Record<string, PropertyDefinition> = {}
-    const propsMatch = content.match(/properties:\s*\n([\s\S]*?)(?=\nrequired:|\njson_schema_extra:|$)/i)
-    if (propsMatch) {
-      // Simple property extraction (top-level only for now)
-      const propSection = propsMatch[1]
-      const propBlocks = propSection.match(/^  (\w+):\s*\n((?:    [^\n]+\n?)+)/gm) || []
-      const validTypes = ["string", "number", "integer", "boolean", "array", "object"] as const
-      for (const block of propBlocks) {
-        const propNameMatch = block.match(/^  (\w+):/m)
-        if (propNameMatch) {
-          const propName = propNameMatch[1]
-          const typeMatch = block.match(/type:\s*(\w+)/i)
-          const descMatch = block.match(/description:\s*(.+)/i)
-          const rawType = typeMatch?.[1] || "string"
-          const propType = validTypes.includes(rawType as typeof validTypes[number])
-            ? rawType as typeof validTypes[number]
-            : "string"
-          properties[propName] = {
-            type: propType,
-            description: descMatch?.[1] || "",
-          }
-        }
-      }
-    }
+    const properties = convertProperties(parsed.properties as Record<string, unknown> | undefined)
 
     // Extract required fields
-    const reqMatch = content.match(/required:\s*\n((?:\s*-\s*\w+\n?)+)/i)
-    const required: string[] = []
-    if (reqMatch) {
-      const reqLines = reqMatch[1].match(/-\s*(\w+)/g) || []
-      for (const line of reqLines) {
-        const field = line.match(/-\s*(\w+)/)?.[1]
-        if (field) required.push(field)
-      }
-    }
+    const rawRequired = Array.isArray(parsed.required) ? parsed.required : []
+    const required = rawRequired.map((r: unknown) => String(r))
 
     return {
       description,
@@ -128,7 +116,7 @@ function parseAgentYaml(content: string): Partial<AgentSchemaState> | null {
 }
 
 export function AgentBuilderView({ initialAgentName }: AgentBuilderViewProps) {
-  const [isLoading, setIsLoading] = useState(!!initialAgentName)
+  const [, setIsLoading] = useState(!!initialAgentName)
 
   const handleUserEdit = useCallback((edit: UserSchemaEdit) => {
     // This will be sent to the chat as context
@@ -145,8 +133,7 @@ export function AgentBuilderView({ initialAgentName }: AgentBuilderViewProps) {
     removeProperty,
     applySchemaUpdate,
     applySchemaFocus,
-    isValid,
-    validationErrors,
+    toYaml,
   } = useAgentSchema({
     initialSchema: initialAgentName
       ? { metadata: { kind: "agent", name: initialAgentName, version: "1.0.0", tools: [], resources: [], structured_output: false, tags: [] } }
@@ -163,7 +150,7 @@ export function AgentBuilderView({ initialAgentName }: AgentBuilderViewProps) {
       try {
         const agentContent = await fetchAgentContent(initialAgentName)
         if (agentContent?.content) {
-          const parsed = parseAgentYaml(agentContent.content)
+          const parsed = parseAgentYamlContent(agentContent.content)
           if (parsed) {
             setSchema(prev => ({
               description: parsed.description || prev.description,
@@ -214,7 +201,7 @@ export function AgentBuilderView({ initialAgentName }: AgentBuilderViewProps) {
   return (
     <div className="flex h-full">
       {/* Schema Preview Panel (Left) */}
-      <div className="w-[400px] border-r border-zinc-200 flex-shrink-0">
+      <div className="w-[440px] min-w-[440px] border-r border-zinc-200 shrink-0">
         <SchemaPreviewPanel
           schema={schema}
           focusState={focusState}
@@ -224,6 +211,7 @@ export function AgentBuilderView({ initialAgentName }: AgentBuilderViewProps) {
           onEditProperty={handleEditProperty}
           onRemoveProperty={removeProperty}
           onAddProperty={handleAddProperty}
+          onExportYaml={toYaml}
         />
       </div>
 

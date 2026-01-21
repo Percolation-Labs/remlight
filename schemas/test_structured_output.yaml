@@ -1,53 +1,193 @@
 # =============================================================================
 # TEST STRUCTURED OUTPUT AGENT
 # =============================================================================
-# Simple agent for testing structured_output: true functionality.
-# This agent produces structured JSON output matching a defined schema.
+# Complex agent for testing structured_output: true functionality.
+# Demonstrates deeply nested types, arrays of objects, and various field types.
 # =============================================================================
 
 name: test_structured_output
 version: "1.0"
 description: |
-  You are a test agent that produces structured output.
+  # Document Analysis Agent
 
-  Your ONLY job is to return a structured response matching the schema below.
+  You are a **document analysis agent** that produces rich structured output.
 
-  Based on the user's input, extract:
-  - summary: A brief summary of what they said
-  - sentiment: positive, negative, or neutral
-  - keywords: List of key words from their message
+  ## Your Role
 
-  DO NOT ask questions. Just produce the structured output.
+  Analyze the user's input and extract a comprehensive structured response.
+  Fill in all fields based on what you can infer from the input.
+
+  > **Important:** For missing information, use reasonable defaults or null values.
+  > DO NOT ask questions - just produce the structured output.
+
+  ## Available Actions
+
+  Use the `action` tool to emit events:
+
+  ```python
+  action(type="metadata", payload={
+      "confidence": 0.95,
+      "processing_time_ms": 150
+  })
+  ```
+
+  ## Output Guidelines
+
+  1. **Analysis Section**
+     - Provide a concise summary (1-2 sentences)
+     - Include sentiment with confidence score
+     - List relevant topics with subtopics
+
+  2. **Entities Section**
+     - Extract all named entities
+     - Classify by type: `person`, `organization`, `location`, etc.
+     - Include confidence scores
+
+  3. **Metadata Section**
+     - Detect language automatically
+     - Report quality indicators
+
+  ## Example Response
+
+  ```json
+  {
+    "analysis": {
+      "summary": "User discusses project timeline",
+      "sentiment": { "overall": "neutral", "score": 0.1 }
+    }
+  }
+  ```
+
+  ---
+
+  *Remember: Quality over speed. Take time to analyze thoroughly.*
 
 type: object
 properties:
-  result:
+  analysis:
     type: object
-    description: Structured analysis result
+    description: Primary analysis results
     properties:
       summary:
         type: string
-        description: Brief summary of the input
+        description: Brief summary of the input (1-2 sentences)
       sentiment:
+        type: object
+        description: Sentiment analysis breakdown
+        properties:
+          overall:
+            type: string
+            enum: [positive, negative, neutral, mixed]
+            description: Overall sentiment classification
+          score:
+            type: number
+            minimum: -1
+            maximum: 1
+            description: Sentiment score from -1 (negative) to 1 (positive)
+          emotions:
+            type: array
+            description: Detected emotions with confidence
+            items:
+              type: object
+              properties:
+                emotion:
+                  type: string
+                  enum: [joy, sadness, anger, fear, surprise, disgust, trust, anticipation]
+                confidence:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+      topics:
+        type: array
+        description: Identified topics with relevance scores
+        items:
+          type: object
+          properties:
+            name:
+              type: string
+              description: Topic name
+            relevance:
+              type: number
+              minimum: 0
+              maximum: 1
+            subtopics:
+              type: array
+              items:
+                type: string
+
+  entities:
+    type: array
+    description: Named entities extracted from the text
+    items:
+      type: object
+      properties:
+        text:
+          type: string
+          description: The entity text as it appears
+        type:
+          type: string
+          enum: [person, organization, location, date, product, event, other]
+        metadata:
+          type: object
+          description: Additional entity metadata
+          properties:
+            confidence:
+              type: number
+            normalized:
+              type: string
+              description: Normalized/canonical form
+            links:
+              type: array
+              items:
+                type: object
+                properties:
+                  source:
+                    type: string
+                  url:
+                    type: string
+
+  metadata:
+    type: object
+    description: Processing metadata
+    properties:
+      language:
         type: string
-        enum: [positive, negative, neutral]
-        description: Overall sentiment
-      keywords:
+        description: Detected language code (e.g., en, es, fr)
+      word_count:
+        type: integer
+        minimum: 0
+      processing_notes:
         type: array
         items:
           type: string
-        description: Key words extracted from input
-    required: [summary, sentiment, keywords]
-    additionalProperties: false
+      quality_indicators:
+        type: object
+        properties:
+          completeness:
+            type: number
+            minimum: 0
+            maximum: 1
+          confidence:
+            type: number
+            minimum: 0
+            maximum: 1
 
 required:
-  - result
+  - analysis
+  - entities
+  - metadata
 
 json_schema_extra:
   kind: agent
   name: test_structured_output
-  version: "1.0.0"
-  tags: [test, structured-output]
+  version: "2.0.0"
+  tags: [test, structured-output, nested-types, complex]
   structured_output: true
-  tools: []
+  tools:
+    - name: action
+      description: Emit metadata events and structured actions to the UI for real-time updates
+    - name: search
+      description: Query the knowledge base using SQL or semantic search to find relevant information
+    - name: parse_file
+      description: Read and extract content from documents including PDFs, images, and text files
   resources: []

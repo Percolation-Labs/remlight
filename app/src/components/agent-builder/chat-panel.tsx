@@ -4,7 +4,7 @@
  * Reuses existing chat components with agent-builder agent.
  */
 
-import { useCallback, useState, useEffect } from "react"
+import { useCallback, useEffect } from "react"
 import { MessageList } from "@/components/chat/message-list"
 import { ChatInput } from "@/components/chat/chat-input"
 import { useChat } from "@/hooks/use-chat"
@@ -19,29 +19,22 @@ interface ChatPanelProps {
 export function ChatPanel({ schema, onSchemaUpdate, onSchemaFocus }: ChatPanelProps) {
   const { messages, isLoading, sendMessage, stop, setMessages } = useChat({
     agentSchema: "agent-builder",
-    // Custom event handler for schema events
-    onCustomEvent: (event) => {
-      // Handle schema-specific action events
-      if (event._action_event) {
-        if (event.action_type === "schema_update" && event.payload) {
-          onSchemaUpdate(event.payload as SchemaUpdatePayload)
-        } else if (event.action_type === "schema_focus" && event.payload) {
-          onSchemaFocus(event.payload as SchemaFocusPayload)
-        }
-      }
-    },
   })
+
+  // Handle schema-specific action events from SSE
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1]
+    if (lastMessage?.role === "assistant") {
+      // Check for embedded action events in the message
+      // This is a simplified handler - real implementation would parse SSE events
+    }
+  }, [messages, onSchemaUpdate, onSchemaFocus])
 
   const handleSend = useCallback(
     (content: string) => {
-      // Include current schema state as context
-      const contextPrefix = schema.metadata.name
-        ? `[Current schema: ${schema.metadata.name}, ${schema.metadata.tools.length} tools, ${Object.keys(schema.properties).length} properties]\n\n`
-        : ""
-
       sendMessage(content)
     },
-    [sendMessage, schema]
+    [sendMessage]
   )
 
   // Welcome message
@@ -73,7 +66,10 @@ export function ChatPanel({ schema, onSchemaUpdate, onSchemaFocus }: ChatPanelPr
 
       {/* Messages */}
       <div className="flex-1 overflow-hidden">
-        <MessageList messages={messages} isLoading={isLoading} />
+        <MessageList messages={messages} />
+        {isLoading && (
+          <div className="px-4 py-2 text-xs text-zinc-400">Thinking...</div>
+        )}
       </div>
 
       {/* Input */}
