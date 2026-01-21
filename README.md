@@ -27,6 +27,7 @@ rem serve --port 8001
 
 | Part | Description |
 |------|-------------|
+| [Part I](https://medium.com/@mrsirsh/a-really-simply-declarative-agent-framework-part-i-6ae2b05fb2a1) | Introduction & architecture |
 | [Part II](https://medium.com/@mrsirsh/part-ii-of-a-really-simply-declarative-agent-framework-320da34e5b4d) | Agent construction & tool signatures |
 | [Part III](https://medium.com/@mrsirsh/part-iii-of-a-really-simply-declarative-agent-framework-fc96cc950c11) | Streaming, SSE events & database persistence |
 
