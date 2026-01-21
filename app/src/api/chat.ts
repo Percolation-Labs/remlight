@@ -21,6 +21,8 @@ export interface ChatCompletionOptions {
   agentSchema?: string
   /** Session ID for conversation continuity */
   sessionId?: string
+  /** Context to include (e.g., current schema state) */
+  context?: string
   /** AbortSignal for cancellation */
   signal?: AbortSignal
 }
@@ -32,7 +34,7 @@ export interface ChatCompletionOptions {
 export async function chatCompletions(
   options: ChatCompletionOptions
 ): Promise<Response> {
-  const { messages, model, agentSchema, sessionId, signal } = options
+  const { messages, model, agentSchema, sessionId, context, signal } = options
 
   const headers: Record<string, string> = {}
 
@@ -48,7 +50,21 @@ export async function chatCompletions(
     headers["X-Model-Name"] = model
   }
 
-  console.log("[Chat API] Sending request:", { agentSchema, sessionId, model, headers })
+  // If context is provided, prepend it to the last user message
+  // Note: Backend ignores system messages from request, uses agent schema's description instead
+  let messagesWithContext = messages
+  if (context && messages.length > 0) {
+    const lastIdx = messages.length - 1
+    const lastMsg = messages[lastIdx]
+    if (lastMsg.role === "user") {
+      messagesWithContext = [
+        ...messages.slice(0, lastIdx),
+        { role: "user" as const, content: `${context}\n\n---\n\nUSER REQUEST:\n${lastMsg.content}` }
+      ]
+    }
+  }
+
+  console.log("[Chat API] Sending request:", { agentSchema, sessionId, model, headers, hasContext: !!context })
 
   const url = `${API_BASE_URL}/v1/chat/completions`
 
@@ -56,7 +72,7 @@ export async function chatCompletions(
     method: "POST",
     headers: getApiHeaders(headers),
     body: JSON.stringify({
-      messages,
+      messages: messagesWithContext,
       stream: true,
       model,
     }),

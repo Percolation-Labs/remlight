@@ -904,6 +904,12 @@ async def create_agent(
     # This is the final step that produces the executable agent
     # =========================================================================
 
+    logger.debug(f"Creating agent with {len(agent_tools)} tools: {[t.__name__ if hasattr(t, '__name__') else str(t) for t in agent_tools]}")
+    # Log the docstrings of each tool so we can verify what the model will see
+    for t in agent_tools:
+        if hasattr(t, '__doc__') and t.__doc__:
+            doc_preview = t.__doc__[:200].replace('\n', ' ')
+            logger.debug(f"Tool '{getattr(t, '__name__', 'unknown')}' docstring: {doc_preview}...")
     agent = Agent(
         model=resolved_model,
         system_prompt=system_prompt,

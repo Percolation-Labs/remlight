@@ -5,7 +5,9 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from "react"
-import { stringify as stringifyYaml } from "yaml"
+import { stringify as stringifyYaml, parse as parseYaml } from "yaml"
+import { applyPatch } from "fast-json-patch"
+import type { Operation } from "fast-json-patch"
 import type {
   AgentSchemaState,
   FocusState,
@@ -38,6 +40,8 @@ export interface UseAgentSchemaReturn {
   // SSE event handlers
   applySchemaUpdate: (payload: SchemaUpdatePayload) => void
   applySchemaFocus: (payload: SchemaFocusPayload) => void
+  setSchemaFromYaml: (yaml: string) => void
+  applyJsonPatch: (patches: Operation[]) => void
 
   // Focus state
   focusState: FocusState
@@ -256,19 +260,21 @@ export function useAgentSchema(options: UseAgentSchemaOptions = {}): UseAgentSch
 
         case "tools":
           if (operation === "append") {
+            const currentTools = prev.metadata?.tools || []
             return {
               ...prev,
               metadata: {
                 ...prev.metadata,
-                tools: [...prev.metadata.tools, value as ToolReference],
+                tools: [...currentTools, value as ToolReference],
               },
             }
           } else if (operation === "remove") {
+            const currentTools = prev.metadata?.tools || []
             return {
               ...prev,
               metadata: {
                 ...prev.metadata,
-                tools: prev.metadata.tools.filter(
+                tools: currentTools.filter(
                   (t) => t.name !== (value as ToolReference).name
                 ),
               },
@@ -283,24 +289,53 @@ export function useAgentSchema(options: UseAgentSchemaOptions = {}): UseAgentSch
             }
           }
 
-        case "properties":
+        case "properties": {
+          const newProperties = { ...(prev.properties || {}) }
           if (path) {
-            const newProperties = { ...prev.properties }
+            // Path provided - set/remove at specific path
             if (operation === "remove") {
               deleteValueByPath(newProperties as Record<string, unknown>, path)
             } else {
               setValueByPath(newProperties as Record<string, unknown>, path, value)
             }
-            return { ...prev, properties: newProperties }
-          } else {
-            return { ...prev, properties: value as Record<string, PropertyDefinition> }
+          } else if (value && typeof value === "object" && !Array.isArray(value)) {
+            // No path - value should be the property name with definition, or full properties object
+            // Check if value looks like a property definition (has 'type' key)
+            if ("type" in value) {
+              // Agent sent {name: "foo", type: "string", ...} - extract name and set
+              const propValue = value as Record<string, unknown>
+              const propName = propValue.name as string
+              if (propName) {
+                const { name: _, ...definition } = propValue
+                newProperties[propName] = definition as PropertyDefinition
+              }
+            } else {
+              // Value is a full properties object - merge it
+              Object.assign(newProperties, value)
+            }
           }
+          // Ignore invalid values (strings, arrays, etc.)
+          return { ...prev, properties: newProperties }
+        }
 
-        case "metadata":
-          return {
-            ...prev,
-            metadata: { ...prev.metadata, ...(value as Partial<AgentSchemaState["metadata"]>) },
+        case "metadata": {
+          const newMetadata = { ...prev.metadata }
+          if (operation === "remove" && typeof value === "string") {
+            // Remove a specific field by name
+            delete (newMetadata as Record<string, unknown>)[value]
+          } else if (value && typeof value === "object") {
+            // Merge values, removing any that are explicitly null/undefined
+            const updates = value as Record<string, unknown>
+            for (const [key, val] of Object.entries(updates)) {
+              if (val === null || val === undefined) {
+                delete (newMetadata as Record<string, unknown>)[key]
+              } else {
+                (newMetadata as Record<string, unknown>)[key] = val
+              }
+            }
           }
+          return { ...prev, metadata: newMetadata as AgentSchemaState["metadata"] }
+        }
 
         default:
           return prev
@@ -388,6 +423,53 @@ export function useAgentSchema(options: UseAgentSchemaOptions = {}): UseAgentSch
     })
   }, [schema])
 
+  // Parse YAML and set entire schema state
+  const setSchemaFromYaml = useCallback((yaml: string) => {
+    try {
+      const parsed = parseYaml(yaml) as Record<string, unknown>
+      if (!parsed || typeof parsed !== "object") return
+
+      const jsonSchemaExtra = (parsed.json_schema_extra || {}) as Record<string, unknown>
+      const tools = (jsonSchemaExtra.tools || []) as Array<Record<string, string>>
+
+      const newSchema: AgentSchemaState = {
+        description: (parsed.description as string) || "",
+        properties: (parsed.properties || {}) as Record<string, PropertyDefinition>,
+        required: (parsed.required || []) as string[],
+        metadata: {
+          kind: (jsonSchemaExtra.kind as string) || "agent",
+          name: (jsonSchemaExtra.name as string) || "",
+          version: (jsonSchemaExtra.version as string) || "1.0.0",
+          tools: tools.map(t => ({
+            name: t.name || "",
+            description: t.description,
+            server: t.server,
+          })),
+          resources: (jsonSchemaExtra.resources || []) as string[],
+          structured_output: (jsonSchemaExtra.structured_output as boolean) || false,
+          tags: (jsonSchemaExtra.tags || []) as string[],
+        },
+      }
+
+      setSchema(newSchema)
+    } catch {
+      // Invalid YAML - ignore
+    }
+  }, [])
+
+  // Apply JSON Patch (RFC 6902) operations to schema
+  const applyJsonPatch = useCallback((patches: Operation[]) => {
+    setSchema((prev) => {
+      try {
+        const cloned = JSON.parse(JSON.stringify(prev))
+        const result = applyPatch(cloned, patches, undefined, false)
+        return result.newDocument as AgentSchemaState
+      } catch {
+        return prev
+      }
+    })
+  }, [])
+
   return {
     schema,
     setSchema,
@@ -400,6 +482,8 @@ export function useAgentSchema(options: UseAgentSchemaOptions = {}): UseAgentSch
     setMetadata,
     applySchemaUpdate,
     applySchemaFocus,
+    setSchemaFromYaml,
+    applyJsonPatch,
     focusState,
     setFocusState,
     clearFocus,

@@ -90,8 +90,8 @@ export function PropertyNode({
     }
   }, [isDirectFocus])
 
-  const Icon = TYPE_ICONS[definition.type]
-  const typeColor = TYPE_COLORS[definition.type]
+  const Icon = TYPE_ICONS[definition.type] || Braces
+  const typeColor = TYPE_COLORS[definition.type] || "text-zinc-600 bg-zinc-100"
 
   const content = (
     <div

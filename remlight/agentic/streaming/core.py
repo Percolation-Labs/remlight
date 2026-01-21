@@ -712,6 +712,7 @@ async def _handle_call_tools_node(
 
                     # Emit ActionEvent (distinct from ToolCallEvent)
                     from remlight.agentic.streaming.events import ActionEvent
+                    logger.debug(f"[stream] Emitting ActionEvent: type={action_type}, payload={payload}")
                     yield format_sse_event(ActionEvent(
                         action_type=action_type,
                         payload=payload,
@@ -738,17 +739,17 @@ async def _handle_call_tools_node(
                 if tool_calls_out is not None:
                     tool_calls_out.append(tool_data)
 
-                # Emit tool completion event (unless it was an action)
-                if not is_action_event:
-                    yield format_sse_event(
-                        ToolCallEvent(
-                            tool_name=tool_data.get("tool_name", "tool"),
-                            tool_id=tool_data.get("tool_id", "unknown"),
-                            status="completed",
-                            arguments=tool_data.get("arguments"),
-                            result=result_content,
-                        )
+                # Always emit tool completion event for UI to show tool call card
+                # (ActionEvent is emitted separately above for action-specific handling)
+                yield format_sse_event(
+                    ToolCallEvent(
+                        tool_name=tool_data.get("tool_name", "tool"),
+                        tool_id=tool_data.get("tool_id", "unknown"),
+                        status="completed",
+                        arguments=tool_data.get("arguments"),
+                        result=result_content,
                     )
+                )
 
                 # Update progress (tool done, generating response)
                 state.current_step = 3

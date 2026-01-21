@@ -160,17 +160,25 @@ export interface ProgressEvent {
 /**
  * Schema update event from agent-builder.
  * Updates a specific section of the schema being built.
+ * Can come either with fields at top level or nested in payload (from ActionEvent).
  */
 export interface SchemaUpdateEvent {
   type: "schema_update"
-  /** Which section to update */
-  section: "tools" | "system_prompt" | "properties" | "metadata"
-  /** The new value */
-  value: unknown
+  /** Which section to update (may be at top level or in payload) */
+  section?: "tools" | "system_prompt" | "properties" | "metadata"
+  /** The new value (may be at top level or in payload) */
+  value?: unknown
   /** Operation type */
   operation?: "set" | "append" | "remove"
   /** Optional nested path within section */
   path?: string
+  /** Payload from ActionEvent format */
+  payload?: {
+    section: "tools" | "system_prompt" | "properties" | "metadata"
+    value: unknown
+    operation?: "set" | "append" | "remove"
+    path?: string
+  }
   /** Action event marker */
   _action_event?: boolean
   action_type?: "schema_update"
@@ -179,15 +187,22 @@ export interface SchemaUpdateEvent {
 /**
  * Schema focus event from agent-builder.
  * Highlights a specific section in the UI.
+ * Can come either with fields at top level or nested in payload (from ActionEvent).
  */
 export interface SchemaFocusEvent {
   type: "schema_focus"
-  /** Which section to focus */
-  section: "tools" | "system_prompt" | "properties" | "metadata" | null
+  /** Which section to focus (may be at top level or in payload) */
+  section?: "tools" | "system_prompt" | "properties" | "metadata" | null
   /** Optional property path for properties section */
   property_path?: string
   /** Optional message to display */
   message?: string
+  /** Payload from ActionEvent format */
+  payload?: {
+    section: "tools" | "system_prompt" | "properties" | "metadata" | null
+    property_path?: string
+    message?: string
+  }
   /** Action event marker */
   _action_event?: boolean
   action_type?: "schema_focus"

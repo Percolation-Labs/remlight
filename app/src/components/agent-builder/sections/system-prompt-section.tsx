@@ -24,6 +24,7 @@ export function SystemPromptSection({
   focusMessage,
   onChange,
 }: SystemPromptSectionProps) {
+  console.log("[SystemPromptSection] Rendering with description:", description?.slice(0, 100) + "...")
   const [isEditing, setIsEditing] = useState(false)
   const [isExpanded, setIsExpanded] = useState(false)
   const [editValue, setEditValue] = useState(description)

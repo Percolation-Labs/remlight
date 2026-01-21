@@ -5,12 +5,12 @@
  * Right: Chat panel with agent-builder agent
  */
 
-import { useCallback, useEffect, useState } from "react"
+import React, { useCallback, useEffect, useState, useRef } from "react"
 import { parse as parseYaml } from "yaml"
 import { SchemaPreviewPanel } from "./schema-preview-panel"
 import { ChatPanel } from "./chat-panel"
 import { useAgentSchema } from "@/hooks/use-agent-schema"
-import { fetchAgentContent } from "@/api/agents"
+import { fetchAgentContent, saveAgent } from "@/api/agents"
 import type { SchemaUpdatePayload, SchemaFocusPayload, UserSchemaEdit, AgentSchemaState, ToolReference, PropertyDefinition } from "@/types/agent-schema"
 
 interface AgentBuilderViewProps {
@@ -116,7 +116,11 @@ function parseAgentYamlContent(content: string): Partial<AgentSchemaState> | nul
 }
 
 export function AgentBuilderView({ initialAgentName }: AgentBuilderViewProps) {
+  console.log("[AgentBuilderView] Component rendering")
   const [, setIsLoading] = useState(!!initialAgentName)
+
+  // Debug: Track schema.description changes
+  const schemaDescriptionRef = useRef<string | undefined>(undefined)
 
   const handleUserEdit = useCallback((edit: UserSchemaEdit) => {
     // This will be sent to the chat as context
@@ -133,6 +137,7 @@ export function AgentBuilderView({ initialAgentName }: AgentBuilderViewProps) {
     removeProperty,
     applySchemaUpdate,
     applySchemaFocus,
+    applyJsonPatch,
     toYaml,
   } = useAgentSchema({
     initialSchema: initialAgentName
@@ -140,6 +145,16 @@ export function AgentBuilderView({ initialAgentName }: AgentBuilderViewProps) {
       : undefined,
     onUserEdit: handleUserEdit,
   })
+
+  // Debug: Track schema.description changes
+  useEffect(() => {
+    if (schemaDescriptionRef.current !== schema.description) {
+      console.log("[AgentBuilderView] schema.description CHANGED!")
+      console.log("[AgentBuilderView] Old:", schemaDescriptionRef.current?.slice(0, 50) + "...")
+      console.log("[AgentBuilderView] New:", schema.description?.slice(0, 50) + "...")
+      schemaDescriptionRef.current = schema.description
+    }
+  }, [schema.description])
 
   // Load existing agent content when editing
   useEffect(() => {
@@ -198,6 +213,18 @@ export function AgentBuilderView({ initialAgentName }: AgentBuilderViewProps) {
     console.log("Add property")
   }, [])
 
+  // Handle trigger_save action from agent
+  const handleTriggerSave = useCallback(async () => {
+    const yaml = toYaml()
+    console.log("[AgentBuilderView] Saving agent schema...")
+    const result = await saveAgent(yaml, true, schema.metadata.tags)
+    if (result) {
+      console.log("[AgentBuilderView] Agent saved:", result)
+    } else {
+      console.error("[AgentBuilderView] Failed to save agent")
+    }
+  }, [toYaml, schema.metadata.tags])
+
   return (
     <div className="flex h-full">
       {/* Schema Preview Panel (Left) */}
@@ -221,6 +248,8 @@ export function AgentBuilderView({ initialAgentName }: AgentBuilderViewProps) {
           schema={schema}
           onSchemaUpdate={handleSchemaUpdate}
           onSchemaFocus={handleSchemaFocus}
+          onPatchSchema={applyJsonPatch}
+          onTriggerSave={handleTriggerSave}
         />
       </div>
     </div>

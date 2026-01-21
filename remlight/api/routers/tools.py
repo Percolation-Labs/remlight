@@ -11,6 +11,7 @@ MCP server and REST API.
 
 import asyncio
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,9 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from remlight.services.database import DatabaseService, get_db
+
+# Disable schema caching when SCHEMA_CACHE_DISABLED=true
+_schema_cache_disabled = os.getenv("SCHEMA_CACHE_DISABLED", "").lower() in ("true", "1", "yes")
 
 
 # Request models for REST API endpoints
@@ -72,8 +76,12 @@ def register_agent_schema(name: str, schema: dict) -> None:
 
 
 def get_agent_schema(name: str) -> dict | None:
-    """Get a registered agent schema."""
-    if name in _agent_schemas:
+    """Get a registered agent schema.
+
+    Set SCHEMA_CACHE_DISABLED=true to always reload from disk.
+    """
+    # Check cache first (unless disabled)
+    if not _schema_cache_disabled and name in _agent_schemas:
         return _agent_schemas[name]
 
     # Try to load from schemas directory (project root/schemas/)
@@ -81,7 +89,8 @@ def get_agent_schema(name: str) -> dict | None:
     if schema_path.exists():
         import yaml
         schema = yaml.safe_load(schema_path.read_text())
-        _agent_schemas[name] = schema
+        if not _schema_cache_disabled:
+            _agent_schemas[name] = schema
         return schema
     return None
 
@@ -404,34 +413,30 @@ async def action(
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
-    Emit a typed action event for SSE streaming.
+    Emit a typed action event for SSE streaming and UI updates.
 
-    This is the generic action tool for structured agent outputs.
-    Clients handle different action types appropriately.
+    This tool sends structured events to the client. Use it to update UI, record metadata, or request input.
 
     Action Types:
+        - "set_schema": Replace the entire schema with new YAML. Payload:
+            - yaml: Complete agent schema as YAML string
+        - "schema_focus": Highlight a section in the UI. Payload:
+            - section: which section to highlight
+            - message: optional message to display
         - "observation": Record metadata about the response (confidence, sources, etc.)
         - "elicit": Request additional information from the user
-        - "delegate": Signal delegation to another agent (internal use)
 
     Args:
-        type: Action type ("observation", "elicit", "delegate", etc.)
-        payload: Action-specific data. For "observation":
-            - confidence: float (0.0-1.0)
-            - sources: list[str] - Entity keys used
-            - session_name: str - Short name for UI
-            - references: list[str] - Doc links
-            - flags: list[str] - Special handling flags
-            - risk_level: str - "low"/"moderate"/"high"/"critical"
-            - risk_score: int - 0-100
-            - extra: dict - Additional fields
+        type: Action type (see above)
+        payload: Action-specific data (see above for each type)
 
     Returns:
-        Action result with _action_event marker for SSE streaming layer
+        Action result confirming the event was emitted
 
     Examples:
+        action(type="schema_update", payload={"section": "system_prompt", "value": "You are a helpful assistant", "operation": "set"})
+        action(type="schema_focus", payload={"section": "tools", "message": "Add tools here"})
         action(type="observation", payload={"confidence": 0.85, "sources": ["doc-1"]})
-        action(type="elicit", payload={"question": "What format?", "options": ["PDF", "CSV"]})
     """
     global _metadata_store
 
@@ -824,8 +829,8 @@ async def parse_file(
 
 
 async def save_agent(
-    name: str,
-    schema_yaml: str,
+    name: str | None = None,
+    schema_yaml: str | None = None,
     description: str | None = None,
     tags: list[str] | None = None,
     overwrite: bool = False,
@@ -833,26 +838,34 @@ async def save_agent(
     """
     Save an agent schema to the database.
 
-    Creates or updates an agent schema in the database. The schema is validated
-    before saving to ensure it's a valid agent definition.
+    When called with no arguments, emits a 'trigger_save' action event that tells
+    the frontend to save the current schema state. This is the recommended usage
+    in the agent-builder context.
+
+    When called with name and schema_yaml, saves directly to the database.
 
     Args:
-        name: Unique agent name (e.g., "my-feedback-agent")
-        schema_yaml: Complete agent schema as YAML string
+        name: Unique agent name (optional - if not provided, triggers frontend save)
+        schema_yaml: Complete agent schema as YAML string (optional)
         description: Optional short description for listing
         tags: Optional tags for discovery
         overwrite: Whether to update if agent already exists
 
     Returns:
-        Dict with:
-            - status: 'success' or 'error'
-            - agent_name: The agent name
-            - version: Schema version
-            - created: True if newly created, False if updated
+        Dict with action event to trigger frontend save, or save result
 
     Examples:
+        save_agent()  # Triggers frontend to save current schema
         save_agent("my-agent", "type: object\\ndescription: ...", tags=["custom"])
     """
+    # If no args provided, emit action event for frontend to handle
+    if name is None or schema_yaml is None:
+        return {
+            "status": "pending",
+            "message": "Save triggered - frontend will complete the save",
+            "_action_event": True,
+            "action_type": "trigger_save",
+        }
     import yaml
 
     db = get_tools_db()

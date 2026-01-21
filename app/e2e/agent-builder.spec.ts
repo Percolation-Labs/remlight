@@ -159,12 +159,12 @@ test.describe("Chat Panel", () => {
 
   test("should have chat input", async ({ page }) => {
     await expect(
-      page.getByPlaceholder("Describe your agent or ask a question...")
+      page.getByPlaceholder(/Describe changes or ask questions/i)
     ).toBeVisible()
   })
 
   test("should allow typing in chat input", async ({ page }) => {
-    const input = page.getByPlaceholder("Describe your agent or ask a question...")
+    const input = page.getByPlaceholder(/Describe changes or ask questions/i)
 
     await input.fill("I want to build an agent that analyzes feedback")
 

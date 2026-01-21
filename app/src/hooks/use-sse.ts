@@ -56,12 +56,31 @@ function parseSSEEvent(data: RawSSEEvent, currentEventType: string): SSEEvent {
     eventType = "done"
   }
 
-  // Detect schema events from action tool (used by agent-builder)
+  // Detect action events (type: "action" from backend ActionEvent)
+  // These include schema_update, schema_focus, and other action types
+  if (data.type === "action" && data.action_type) {
+    // Map to specific event types for easier handling
+    if (data.action_type === "schema_update") {
+      eventType = "schema_update"
+    } else if (data.action_type === "schema_focus") {
+      eventType = "schema_focus"
+    } else {
+      eventType = "action"
+    }
+  }
+
+  // Also support legacy _action_event format (from tool result directly)
   if (!eventType && data._action_event && data.action_type === "schema_update") {
     eventType = "schema_update"
   }
   if (!eventType && data._action_event && data.action_type === "schema_focus") {
     eventType = "schema_focus"
+  }
+  if (!eventType && data._action_event && data.action_type === "patch_schema") {
+    eventType = "patch_schema"
+  }
+  if (!eventType && data._action_event && data.action_type === "trigger_save") {
+    eventType = "trigger_save"
   }
 
   // Fall back to currentEventType only if we couldn't detect from structure
@@ -142,7 +161,6 @@ export function useSSE(options: UseSSEOptions): UseSSEReturn {
                 onEvent(event)
               } catch {
                 // Skip malformed JSON silently
-                console.debug("Skipping malformed SSE data:", jsonStr)
               }
             }
           }

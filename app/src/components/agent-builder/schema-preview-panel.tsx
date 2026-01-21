@@ -38,6 +38,7 @@ export function SchemaPreviewPanel({
   onAddProperty,
   onExportYaml,
 }: SchemaPreviewPanelProps) {
+  console.log("[SchemaPreviewPanel] Rendering with description:", schema.description?.slice(0, 100) + "...")
   const [copied, setCopied] = useState(false)
 
   const handleExport = async () => {

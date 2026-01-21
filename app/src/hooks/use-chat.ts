@@ -20,8 +20,12 @@ export interface UseChatOptions {
   model?: string
   /** Session ID */
   sessionId?: string
+  /** Context to include with each message (e.g., current schema state) */
+  context?: string
   /** Callback when session ID changes */
   onSessionIdChange?: (sessionId: string) => void
+  /** Callback when an action event is received */
+  onActionEvent?: (actionType: string, payload: Record<string, unknown>) => void
 }
 
 export interface UseChatReturn {
@@ -58,7 +62,7 @@ function mapToolStatus(status: string): ToolCall["state"] {
 }
 
 export function useChat(options: UseChatOptions = {}): UseChatReturn {
-  const { initialMessages = [], agentSchema, model, sessionId } = options
+  const { initialMessages = [], agentSchema, model, sessionId, context, onActionEvent } = options
 
   const [messages, setMessages] = useState<Message[]>(initialMessages)
   const [isLoading, setIsLoading] = useState(false)
@@ -71,10 +75,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
    * Process an SSE event and update the current message.
    */
   const handleEvent = useCallback((event: SSEEvent) => {
-    console.debug("[SSE Event]", event.type, event)
-
     if (!currentMessageRef.current) {
-      console.warn("[SSE] No current message ref")
       return
     }
 
@@ -84,7 +85,6 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
       case "text_delta": {
         const textEvent = event as TextDeltaEvent
         const chunk = textEvent.choices?.[0]?.delta?.content || ""
-        console.debug("[SSE text_delta] chunk:", chunk)
         if (chunk) {
           msg.content += chunk
           msg.status = "streaming"
@@ -123,6 +123,17 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
           agentName: agentName,
         }
 
+        // Handle action tool calls for schema updates
+        // The action data is in the result, not arguments
+        if (actualToolName === "action" && toolEvent.status === "completed" && toolEvent.result) {
+          const result = toolEvent.result as Record<string, unknown>
+          const actionType = result.action_type as string
+          const payload = result.payload as Record<string, unknown>
+          if (actionType && payload && onActionEvent) {
+            onActionEvent(actionType, payload)
+          }
+        }
+
         if (toolEvent.status === "started") {
           // Track ask_agent as parent for subsequent child tools
           if (toolEvent.tool_name === "ask_agent") {
@@ -151,6 +162,40 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
         setMessages((prev) =>
           prev.map((m) => (m.id === msg.id ? { ...msg } : m))
         )
+        break
+      }
+
+      case "schema_update": {
+        const actionEvent = event as { payload?: Record<string, unknown>; section?: string; value?: unknown }
+        const payload = actionEvent.payload || actionEvent
+        if (onActionEvent && payload.section !== undefined) {
+          onActionEvent("schema_update", payload as Record<string, unknown>)
+        }
+        break
+      }
+
+      case "schema_focus": {
+        const actionEvent = event as { payload?: Record<string, unknown>; section?: string }
+        const payload = actionEvent.payload || actionEvent
+        if (onActionEvent && payload.section !== undefined) {
+          onActionEvent("schema_focus", payload as Record<string, unknown>)
+        }
+        break
+      }
+
+      case "patch_schema": {
+        const actionEvent = event as { payload?: { patches?: unknown[] } }
+        const payload = actionEvent.payload
+        if (onActionEvent && payload && Array.isArray(payload.patches)) {
+          onActionEvent("patch_schema", payload as Record<string, unknown>)
+        }
+        break
+      }
+
+      case "trigger_save": {
+        if (onActionEvent) {
+          onActionEvent("trigger_save", {})
+        }
         break
       }
 
@@ -232,7 +277,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
         break
       }
     }
-  }, [])
+  }, [onActionEvent])
 
   const handleError = useCallback((error: Error) => {
     if (currentMessageRef.current) {
@@ -321,6 +366,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
           agentSchema,
           model,
           sessionId,
+          context,
           signal: abortControllerRef.current.signal,
         })
 
@@ -332,7 +378,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
         handleError(error as Error)
       }
     },
-    [messages, isLoading, agentSchema, model, sessionId, stream, handleError]
+    [messages, isLoading, agentSchema, model, sessionId, context, stream, handleError]
   )
 
   /**
