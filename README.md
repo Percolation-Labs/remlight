@@ -23,6 +23,13 @@ rem serve --port 8001
 - **OpenAI-compatible API**: Drop-in replacement for chat completions
 - **MCP Tools**: `search`, `action`, `ask_agent` via FastMCP
 
+## Blog Series
+
+| Part | Description |
+|------|-------------|
+| [Part II](https://medium.com/@mrsirsh/part-ii-of-a-really-simply-declarative-agent-framework-320da34e5b4d) | Agent construction & tool signatures |
+| [Part III](https://medium.com/@mrsirsh/part-iii-of-a-really-simply-declarative-agent-framework-fc96cc950c11) | Streaming, SSE events & database persistence |
+
 ## Documentation
 
 | Document | Description |
