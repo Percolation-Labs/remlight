@@ -24,15 +24,17 @@ rem ask "Tell me more about the streaming" --session f2c5db60-fc72-429a-9768-bf7
 ### API
 
 ```bash
-# Stream a chat completion
+# Stream a chat completion with orchestrator agent
+# Use UUIDs for user and session IDs: uuidgen or python -c "import uuid; print(uuid.uuid4())"
 curl -X POST http://localhost:8080/api/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "X-User-Id: a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" \
   -H "X-Session-Id: f2c5db60-fc72-429a-9768-bf7d83733126" \
+  -H "X-Agent-Schema: orchestrator-agent" \
   -d '{
     "messages": [{"role": "user", "content": "What is RemLight?"}],
     "model": "openai:gpt-4.1",
-    "stream": true,
-    "agent_schema": "orchestrator-agent"
+    "stream": true
   }'
 ```
 

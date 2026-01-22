@@ -75,10 +75,13 @@ rem serve --port 8001 --reload
 ### Chat Completions (OpenAI-compatible)
 
 ```bash
+# Use UUIDs for user and session IDs to ensure uniqueness
+# Generate with: uuidgen or python -c "import uuid; print(uuid.uuid4())"
 curl -X POST http://localhost:8001/api/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "X-User-Id: user-123" \
+  -H "X-User-Id: a1b2c3d4-e5f6-7890-abcd-ef1234567890" \
   -H "X-Session-Id: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "X-Agent-Schema: orchestrator-agent" \
   -d '{
     "messages": [{"role": "user", "content": "What is machine learning?"}],
     "stream": true

@@ -260,12 +260,14 @@ Headers are automatically propagated through the request lifecycle:
 ### Example Request
 
 ```bash
+# Use UUIDs for user and session IDs to ensure uniqueness
+# Generate with: uuidgen or python -c "import uuid; print(uuid.uuid4())"
 curl -X POST http://localhost:8000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "X-User-Id: a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" \
   -H "X-Session-Id: 550e8400-e29b-41d4-a716-446655440000" \
   -H "X-Tenant-Id: acme-corp" \
-  -H "X-Agent-Schema: query-agent" \
+  -H "X-Agent-Schema: orchestrator-agent" \
   -H "X-Client-Id: web" \
   -d '{"messages": [{"role": "user", "content": "Hello"}], "stream": true}'
 ```
@@ -278,8 +280,11 @@ Test multi-agent orchestration with SSE streaming:
 # Start the server first: rem serve
 
 # Test orchestrator agent (delegates to worker-agent)
+# Use UUIDs for user and session IDs: uuidgen or python -c "import uuid; print(uuid.uuid4())"
 curl -N -X POST http://localhost:8000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "X-User-Id: a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" \
+  -H "X-Session-Id: 550e8400-e29b-41d4-a716-446655440000" \
   -H "X-Agent-Schema: orchestrator-agent" \
   -d '{"messages": [{"role": "user", "content": "Count to 3"}], "stream": true}'
 ```
