@@ -39,6 +39,12 @@ This project uses [uv](https://docs.astral.sh/uv/) for fast Python package manag
 # Install uv (if not already installed)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
+# Install Tesseract OCR (required for PDF/image processing)
+# macOS
+brew install tesseract
+# Ubuntu/Debian
+# sudo apt-get install tesseract-ocr
+
 # Create virtual environment and install dependencies
 uv sync
 
