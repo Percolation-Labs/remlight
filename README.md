@@ -1,6 +1,6 @@
 # REMLight
 
-A lightweight agentic framework built on [REM](https://github.com/mr-saoirse/rem) - the declarative memory and query system for PostgreSQL.
+A lightweight agentic framework built ideas from [REM](https://pypi.org/project/remdb/) - the declarative memory and query system for PostgreSQL.
 
 ## Blog Series
 
