@@ -31,13 +31,32 @@ cp .env.example .env
 # OPENAI_API_KEY=sk-...
 ```
 
-### 3. Ingest Ontology
+### 3. Install Dependencies (Local Development)
+
+This project uses [uv](https://docs.astral.sh/uv/) for fast Python package management.
+
+```bash
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create virtual environment and install dependencies
+uv sync
+
+# Activate the environment
+source .venv/bin/activate
+
+# Or run commands directly with uv (auto-activates)
+uv run rem --help
+uv run rem serve --port 8001 --reload
+```
+
+### 4. Ingest Ontology
 
 ```bash
 rem ingest ontology/
 ```
 
-### 4. Query the Knowledge Base
+### 5. Query the Knowledge Base
 
 ```bash
 # Exact key lookup
@@ -50,7 +69,7 @@ rem query "SEARCH declarative agents IN ontologies"
 rem query "FUZZY multi-agent"
 ```
 
-### 5. Ask an Agent
+### 6. Ask an Agent
 
 ```bash
 # Simple question
@@ -146,7 +165,7 @@ export OTEL__COLLECTOR_ENDPOINT=http://localhost:6016
          │     └── Volume: phoenix_data
          │
          └── api (Dockerfile)
-               ├── Port: 8080 → 8000
+               ├── Port: 8080 → 8000  #separate port to what you might server from codebase e.g. 8001
                ├── Hot reload: ./remlight, ./schemas mounted
                └── Connects to: postgres:5432, phoenix:6006
 ```
