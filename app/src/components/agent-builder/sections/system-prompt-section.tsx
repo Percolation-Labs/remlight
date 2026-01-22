@@ -7,6 +7,7 @@
 
 import { useState, useRef, useEffect } from "react"
 import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 import { FileText, Check, X, ChevronDown, ChevronUp } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -181,7 +182,7 @@ export function SystemPromptSection({
             )}
             onClick={() => setIsEditing(true)}
           >
-            <ReactMarkdown>{description}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{description}</ReactMarkdown>
           </div>
         ) : (
           <div

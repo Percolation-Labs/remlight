@@ -151,7 +151,7 @@ export function ToolsSection({
 
           {/* Available tools list */}
           <ScrollArea className="max-h-[200px]">
-            <div className="p-2">
+            <div className="p-2 pb-6">
               {isLoading ? (
                 <div className="flex items-center justify-center py-6">
                   <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
@@ -193,7 +193,7 @@ export function ToolsSection({
       )}
 
       {/* Configured tools list */}
-      <div className="p-3">
+      <div className="p-3 pb-4">
         {tools.length === 0 ? (
           <div className="text-center py-4 text-xs text-zinc-400">
             No tools configured. Add tools to give your agent capabilities.

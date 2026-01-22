@@ -59,10 +59,21 @@ async def _ask_async(
         run_sync,
         schema_from_yaml_file,
     )
+    from remlight.agentic.streaming import is_simulator_agent, stream_simulator_plain
     from remlight.api.mcp_main import get_mcp_tools, init_mcp
     from remlight.api.routers.tools import get_agent_schema, init_tools
     from remlight.services.database import get_db
     from remlight.settings import settings
+
+    # Handle rem-simulator specially - bypass everything
+    if is_simulator_agent(schema_path):
+        click.echo()
+        click.echo("[rem-simulator] Generating test events...")
+        click.echo()
+        async for chunk in stream_simulator_plain(query):
+            click.echo(chunk, nl=False)
+        click.echo()
+        return
 
     # Validate session_id is a UUID if provided
     if session_id:

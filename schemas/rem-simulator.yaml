@@ -1,0 +1,62 @@
+type: object
+description: |
+  # REM Simulator Agent
+
+  A test agent that generates sample SSE events for UI client testing.
+
+  This agent produces synthetic responses demonstrating all supported content types:
+  - Streaming text content (markdown with headers, lists, code blocks)
+  - Tool call events (started, executing, completed)
+  - Action events (observation, elicit, delegate, patch_schema)
+  - Structured output (Pydantic model response)
+  - Progress events
+  - Error events (recoverable)
+
+  ## Usage
+
+  ```bash
+  # CLI
+  rem ask "test all" --schema rem-simulator
+
+  # API
+  curl -X POST http://localhost:8000/api/v1/chat/completions \
+    -H "X-Agent-Schema: rem-simulator" \
+    -d '{"messages": [{"role": "user", "content": "test all"}]}'
+  ```
+
+  ## Test Modes
+
+  The prompt controls which content types are demonstrated:
+  - "test all" - Full demonstration of all event types
+  - "test text" - Only markdown text streaming
+  - "test tools" - Tool call lifecycle events
+  - "test actions" - Action events (observation, elicit, etc.)
+  - "test structured" - Structured output response
+  - "test error" - Recoverable error handling
+
+  ## Purpose
+
+  Use this agent to:
+  - Verify UI renders all event types correctly
+  - Test SSE parsing and handling
+  - Debug frontend message display
+  - Benchmark streaming performance
+properties:
+  response:
+    type: string
+    description: Simulated response text
+  events_generated:
+    type: array
+    items:
+      type: string
+    description: List of event types that were generated
+json_schema_extra:
+  kind: agent
+  name: rem-simulator
+  version: 1.0.0
+  structured_output: false
+  tools: []
+  tags:
+    - testing
+    - simulator
+    - development

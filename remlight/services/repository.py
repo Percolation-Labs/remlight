@@ -112,7 +112,7 @@ from remlight.services.sql_builder import (
 T = TypeVar("T", bound=BaseModel)
 
 # Default fields to check for embedding content (in priority order)
-# Used when model doesn't specify embedding_field in model_config
+# Used when model has embedding_field=True (not a specific field name)
 DEFAULT_EMBEDDING_FIELDS = ["description", "content"]
 
 
@@ -301,22 +301,19 @@ class Repository(Generic[T]):
             # =================================================================
             # Only generate embeddings if:
             # 1. generate_embeddings=True (default)
-            # 2. The model has an 'embedding' field defined
+            # 2. Model has 'embedding_field' in model_config
             #
-            # Source field priority:
-            # 1. model_config['embedding_field'] if specified
-            # 2. Fallback: 'description' then 'content'
+            # The embedding_field config determines which field to use:
+            # - True: use default precedence (description → content)
+            # - "fieldname": use that specific field, then fallback to defaults
             # =================================================================
-            embedding = None
+            embedding: list[float] | None = None
             if generate_embeddings:
-                # Check if model has embedding_field config - only then generate
                 model_config = getattr(record, 'model_config', {}) or {}
                 embedding_field = model_config.get('embedding_field')
 
                 if embedding_field:
-                    # Determine which fields to try:
-                    # - True: use default precedence (description → content)
-                    # - "fieldname": use that specific field, then defaults
+                    # Determine which fields to try
                     if embedding_field is True:
                         fields_to_try = DEFAULT_EMBEDDING_FIELDS
                     else:
@@ -326,34 +323,18 @@ class Repository(Generic[T]):
                         content = getattr(record, field_name, None)
                         if content and isinstance(content, str):
                             logger.debug(f"Generating embedding for {field_name}")
-                            embedding_list = await generate_embedding_async(content)
-                            # Format as PostgreSQL array literal for pgvector
-                            embedding = "[" + ",".join(str(x) for x in embedding_list) + "]"
+                            embedding = await generate_embedding_async(content)
                             break  # Use first field with content
 
             # =================================================================
             # SQL GENERATION AND EXECUTION
             # =================================================================
             # build_upsert creates: INSERT INTO ... ON CONFLICT (id) DO UPDATE
-            # If embedding was generated, we patch the SQL to include it
+            # Pass embedding to build_upsert for proper pgvector handling
             # =================================================================
-            sql, params = build_upsert(record, self.table_name, conflict_field)
-
-            # Add embedding to params if generated
-            if embedding:
-                params.append(embedding)
-                # Modify SQL to include embedding column
-                # This is SQL surgery - adding embedding to INSERT and UPDATE clauses
-                sql = sql.replace(
-                    ") VALUES (",
-                    ", embedding) VALUES ("
-                ).replace(
-                    f") ON CONFLICT",
-                    f", ${len(params)}) ON CONFLICT"
-                ).replace(
-                    "SET ",
-                    "SET embedding = EXCLUDED.embedding, "
-                )
+            sql, params = build_upsert(
+                record, self.table_name, conflict_field, embedding=embedding
+            )
 
             # Execute and capture returned ID
             row = await self.db.fetchrow(sql, *params)

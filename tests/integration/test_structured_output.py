@@ -235,8 +235,8 @@ class TestStructuredOutputSchemaLoading:
         # Verify schema properties
         assert schema.json_schema_extra.name == "test_structured_output"
         assert schema.json_schema_extra.structured_output is True
-        assert "result" in schema.properties
-        assert schema.properties["result"]["type"] == "object"
+        assert "analysis" in schema.properties
+        assert schema.properties["analysis"]["type"] == "object"
 
     @pytest.mark.asyncio
     async def test_create_agent_from_test_structured_output_schema(self):

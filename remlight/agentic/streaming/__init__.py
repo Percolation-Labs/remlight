@@ -18,6 +18,11 @@ from remlight.agentic.streaming.core import (
     stream_sse,
     stream_sse_with_save,
 )
+from remlight.agentic.streaming.simulator import (
+    is_simulator_agent,
+    stream_simulator_plain,
+    stream_simulator_sse,
+)
 from remlight.agentic.streaming.events import (
     ActionEvent,
     ContentChunk,
@@ -41,6 +46,10 @@ __all__ = [
     "stream_sse_with_save",
     "stream_plain",
     "save_user_message",
+    # Simulator
+    "stream_simulator_sse",
+    "stream_simulator_plain",
+    "is_simulator_agent",
     # Event types
     "ActionEvent",
     "ToolCallEvent",

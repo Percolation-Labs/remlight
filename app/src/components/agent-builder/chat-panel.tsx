@@ -32,7 +32,11 @@ export function ChatPanel({ schema, onSchemaUpdate, onSchemaFocus, onPatchSchema
       name: schema.metadata.name || "(not set)",
       version: schema.metadata.version,
       description: schema.description ? schema.description.slice(0, 500) + (schema.description.length > 500 ? "..." : "") : "(not set)",
-      tools: schema.metadata.tools.map(t => t.name),
+      tools: schema.metadata.tools.map(t => ({
+        name: t.name,
+        ...(t.description && { description: t.description }),
+        ...(t.server && { server: t.server }),
+      })),
       properties: schema.properties,  // Full structure so agent can see types
       structured_output: schema.metadata.structured_output,
       tags: schema.metadata.tags,

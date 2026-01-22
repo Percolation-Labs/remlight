@@ -14,7 +14,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from remlight.agentic import AgentContext, create_agent, schema_from_yaml
-from remlight.agentic.streaming import save_user_message, stream_sse_with_save
+from remlight.agentic.streaming import (
+    is_simulator_agent,
+    save_user_message,
+    stream_simulator_sse,
+    stream_sse_with_save,
+)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -86,6 +91,35 @@ async def chat_completions(
     # Get agent schema from header or use default
     # schema_uri can be an agent name (e.g., "orchestrator-agent") or a path
     schema_uri = req.headers.get("x-agent-schema")
+
+    # Handle rem-simulator agent specially - bypass LLM entirely
+    if is_simulator_agent(schema_uri):
+        # Build prompt from most recent user message
+        user_messages = [m for m in request.messages if m.role == "user"]
+        prompt = user_messages[-1].content if user_messages else "test all"
+
+        if request.stream:
+            return StreamingResponse(
+                stream_simulator_sse(prompt=prompt, model="rem-simulator"),
+                media_type="text/event-stream",
+            )
+        else:
+            # Non-streaming simulator response
+            return {
+                "id": "chatcmpl-simulator",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "Simulator response. Use stream=true for full demonstration.",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+
     if schema_uri:
         # First try to look up by name from the registry
         from remlight.api.routers.tools import get_agent_schema

@@ -1,6 +1,6 @@
 """Test agent-builder schema update flow.
 
-The agent-builder should call the action tool with type="schema_update"
+The agent-builder should call the action tool with type="patch_schema"
 when asked to change the draft schema. This test verifies that behavior.
 """
 
@@ -69,7 +69,7 @@ def find_action_events(events: list[dict], action_type: str) -> list[dict]:
 
 
 @pytest.mark.asyncio
-async def test_agent_builder_calls_action_tool_for_schema_update(db_connected):
+async def test_agent_builder_calls_action_tool_for_patch_schema(db_connected):
     """Test that agent-builder calls action tool when asked to update schema."""
     # Clear cached schema to ensure fresh load
     from remlight.api.routers.tools import _agent_schemas
@@ -122,7 +122,7 @@ async def test_agent_builder_calls_action_tool_for_schema_update(db_connected):
     for tc in action_tool_calls:
         print(json.dumps(tc, indent=2, default=str))
 
-    # Verify the agent called action tool with schema_update
+    # Verify the agent called action tool with patch_schema
     assert len(action_tool_calls) >= 1, (
         f"Expected agent to call 'action' tool, but found no action tool calls. "
         f"Total events: {len(events)}. "
@@ -132,50 +132,61 @@ async def test_agent_builder_calls_action_tool_for_schema_update(db_connected):
     # Check for action events directly (emitted by the streaming core)
     action_events = [e for e in events if e.get("type") == "action"]
 
-    # Also check tool_call results for schema_update
-    schema_update_from_result = [
+    # Also check tool_call results for patch_schema
+    patch_schema_from_result = [
         tc for tc in action_tool_calls
-        if tc.get("result", {}).get("action_type") == "schema_update"
+        if tc.get("result", {}).get("action_type") == "patch_schema"
     ]
 
-    assert len(action_events) >= 1 or len(schema_update_from_result) >= 1, (
-        f"Expected at least one schema_update action. "
-        f"Action events: {len(action_events)}, schema_update in results: {len(schema_update_from_result)}"
+    assert len(action_events) >= 1 or len(patch_schema_from_result) >= 1, (
+        f"Expected at least one patch_schema action. "
+        f"Action events: {len(action_events)}, patch_schema in results: {len(patch_schema_from_result)}"
     )
 
     # Get the payload from either source
     if action_events:
         payload = action_events[0].get("payload", {})
     else:
-        payload = schema_update_from_result[0].get("result", {}).get("payload", {})
+        payload = patch_schema_from_result[0].get("result", {}).get("payload", {})
 
-    assert payload.get("section") == "system_prompt", (
-        f"Expected section='system_prompt', got: {payload.get('section')}"
+    # patch_schema uses JSON Patch format with 'patches' array
+    patches = payload.get("patches", [])
+    assert len(patches) >= 1, (
+        f"Expected at least one patch operation, got: {patches}"
     )
-    assert "coding assistant" in str(payload.get("value", "")).lower(), (
-        f"Expected value to contain the prompt text, got: {payload.get('value')}"
+
+    # Check that one of the patches updates the description (system prompt)
+    description_patch = next(
+        (p for p in patches if p.get("path") == "/description"),
+        None
+    )
+    assert description_patch is not None, (
+        f"Expected a patch for /description path, got patches: {patches}"
+    )
+    assert "coding assistant" in str(description_patch.get("value", "")).lower(), (
+        f"Expected value to contain the prompt text, got: {description_patch.get('value')}"
     )
 
 
 @pytest.mark.asyncio
-async def test_agent_builder_schema_update_returns_action_event(db_connected):
-    """Test that schema_update action returns an ActionEvent for SSE streaming."""
+async def test_agent_builder_patch_schema_returns_action_event(db_connected):
+    """Test that patch_schema action returns an ActionEvent for SSE streaming."""
     from remlight.api.routers.tools import action
 
-    # Directly call the action tool
+    # Directly call the action tool with JSON Patch format
     result = await action(
-        type="schema_update",
+        type="patch_schema",
         payload={
-            "section": "system_prompt",
-            "value": "Test prompt",
-            "operation": "set",
+            "patches": [
+                {"op": "replace", "path": "/description", "value": "Test prompt"}
+            ]
         }
     )
 
     # Verify the result has _action_event marker for SSE
     assert result.get("_action_event") is True, "action should return _action_event=True"
-    assert result.get("action_type") == "schema_update", "action_type should be schema_update"
-    assert result.get("payload", {}).get("section") == "system_prompt"
+    assert result.get("action_type") == "patch_schema", "action_type should be patch_schema"
+    assert result.get("payload", {}).get("patches") is not None
 
 
 @pytest.mark.asyncio
@@ -209,5 +220,5 @@ async def test_agent_builder_prompt_describes_action_tool(db_connected):
 
     # Check that the prompt mentions key concepts
     assert "action" in description.lower(), "Prompt should mention action tool"
-    assert "schema_update" in description, "Prompt should mention schema_update type"
-    assert "section" in description.lower(), "Prompt should mention section parameter"
+    assert "patch_schema" in description, "Prompt should mention patch_schema type"
+    assert "patches" in description.lower(), "Prompt should mention patches parameter"

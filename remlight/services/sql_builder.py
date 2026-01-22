@@ -149,6 +149,7 @@ def build_upsert(
     table_name: str,
     conflict_field: str = "id",
     return_id: bool = True,
+    embedding: list[float] | None = None,
 ) -> tuple[str, list[Any]]:
     """
     Build INSERT ... ON CONFLICT DO UPDATE (upsert) query from Pydantic model.
@@ -158,6 +159,7 @@ def build_upsert(
         table_name: Target table name
         conflict_field: Field to check for conflicts (default: "id")
         return_id: Return the inserted/updated ID (default: True)
+        embedding: Optional vector embedding to include (pgvector)
 
     Returns:
         Tuple of (sql_query, parameters)
@@ -165,8 +167,20 @@ def build_upsert(
     data = model_to_dict(model)
 
     fields = list(data.keys())
-    placeholders = [f"${i+1}" for i in range(len(fields))]
     values = [data[field] for field in fields]
+
+    # Add embedding if provided
+    if embedding is not None:
+        fields.append("embedding")
+        # Format as pgvector string literal: '[0.1,0.2,...]'
+        embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+        values.append(embedding_str)
+
+    placeholders = [f"${i+1}" for i in range(len(fields))]
+
+    # For embedding column, add ::vector cast
+    if embedding is not None:
+        placeholders[-1] = f"${len(fields)}::vector"
 
     # Build update clause (exclude conflict field)
     update_fields = [f for f in fields if f != conflict_field]
@@ -175,7 +189,6 @@ def build_upsert(
     if "deleted_at" not in update_fields:
         update_clauses.append("deleted_at = NULL")
 
-    # Single-line format for easier SQL surgery in repository (embedding injection)
     sql = f"INSERT INTO {table_name} ({', '.join(fields)}) VALUES ({', '.join(placeholders)}) ON CONFLICT ({conflict_field}) DO UPDATE SET {', '.join(update_clauses)}"
 
     if return_id:

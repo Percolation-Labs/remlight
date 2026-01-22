@@ -7,6 +7,7 @@
 import { useCallback, useState, useMemo } from "react"
 import { useSearchParams } from "react-router-dom"
 import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 import { X } from "lucide-react"
 import { Sidebar } from "@/components/sidebar"
 import { ChatView } from "@/components/chat"
@@ -164,7 +165,7 @@ export function AppLayout() {
             <ScrollArea className="flex-1">
               <div className="max-w-3xl mx-auto px-6 py-8">
                 <article className="prose prose-zinc max-w-none">
-                  <ReactMarkdown>{ontologyPage.content}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{ontologyPage.content}</ReactMarkdown>
                 </article>
               </div>
             </ScrollArea>

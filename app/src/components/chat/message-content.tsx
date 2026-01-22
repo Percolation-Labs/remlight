@@ -5,6 +5,7 @@
  */
 
 import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
 import type { Components } from "react-markdown"
@@ -90,6 +91,43 @@ const components: Components = {
   pre({ children }) {
     return <pre className="my-2">{children}</pre>
   },
+  // Table components
+  table({ children }) {
+    return (
+      <div className="my-3 overflow-x-auto">
+        <table className="min-w-full border-collapse border border-zinc-300 text-sm">
+          {children}
+        </table>
+      </div>
+    )
+  },
+  thead({ children }) {
+    return <thead className="bg-zinc-100">{children}</thead>
+  },
+  tbody({ children }) {
+    return <tbody className="divide-y divide-zinc-200">{children}</tbody>
+  },
+  tr({ children }) {
+    return <tr className="hover:bg-zinc-50">{children}</tr>
+  },
+  th({ children }) {
+    return (
+      <th className="px-3 py-2 text-left font-semibold text-zinc-700 border border-zinc-300">
+        {children}
+      </th>
+    )
+  },
+  td({ children }) {
+    return (
+      <td className="px-3 py-2 text-zinc-600 border border-zinc-300">
+        {children}
+      </td>
+    )
+  },
+  // Horizontal rule
+  hr() {
+    return <hr className="my-4 border-zinc-300" />
+  },
 }
 
 export function MessageContent({ content }: MessageContentProps) {
@@ -99,7 +137,7 @@ export function MessageContent({ content }: MessageContentProps) {
 
   return (
     <div className="prose prose-sm prose-zinc max-w-none text-sm leading-relaxed">
-      <ReactMarkdown components={components}>{content}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{content}</ReactMarkdown>
     </div>
   )
 }
