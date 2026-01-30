@@ -291,6 +291,103 @@ CREATE INDEX IF NOT EXISTS tools_tags_idx ON tools USING GIN (tags);
 CREATE INDEX IF NOT EXISTS tools_embedding_idx ON tools USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX IF NOT EXISTS tools_name_trgm_idx ON tools USING GIN (name gin_trgm_ops);
 
+-- Feedback (user feedback on agent responses)
+-- Decoupled from Scenarios: Feedback is end-user ratings, Scenarios are admin test cases
+CREATE TABLE IF NOT EXISTS feedback (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+    message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+    trace_id VARCHAR(256),  -- Phoenix/OTEL trace ID
+    span_id VARCHAR(256),   -- Phoenix/OTEL span ID
+    name VARCHAR(256) DEFAULT 'user_feedback',  -- Annotation type
+    score FLOAT,            -- Numeric rating (0.0 to 1.0)
+    label VARCHAR(128),     -- Categorical label (thumbs_up, thumbs_down, helpful, etc.)
+    comment TEXT,           -- Free text feedback
+    source VARCHAR(64) DEFAULT 'user',  -- user, evaluator, automated
+    graph_edges JSONB DEFAULT '[]',
+    metadata JSONB DEFAULT '{}',
+    tags TEXT[] DEFAULT '{}',
+    user_id VARCHAR(256),
+    tenant_id VARCHAR(256),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    deleted_at TIMESTAMP WITH TIME ZONE
+);
+CREATE INDEX IF NOT EXISTS feedback_session_id_idx ON feedback(session_id);
+CREATE INDEX IF NOT EXISTS feedback_message_id_idx ON feedback(message_id);
+CREATE INDEX IF NOT EXISTS feedback_trace_id_idx ON feedback(trace_id);
+CREATE INDEX IF NOT EXISTS feedback_user_id_idx ON feedback(user_id);
+CREATE INDEX IF NOT EXISTS feedback_label_idx ON feedback(label);
+CREATE INDEX IF NOT EXISTS feedback_source_idx ON feedback(source);
+CREATE INDEX IF NOT EXISTS feedback_created_at_idx ON feedback(created_at);
+
+-- Collections (groups of sessions for batch evaluation)
+CREATE TABLE IF NOT EXISTS collections (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(512) NOT NULL,
+    description TEXT,
+    session_count INTEGER DEFAULT 0,  -- Cached count, updated via triggers
+    status VARCHAR(64) DEFAULT 'active',  -- active, archived, running, completed
+    query_filter JSONB,  -- Saved query for auto-population
+    graph_edges JSONB DEFAULT '[]',
+    metadata JSONB DEFAULT '{}',
+    tags TEXT[] DEFAULT '{}',
+    embedding VECTOR(1536),  -- For semantic search on description
+    user_id VARCHAR(256),
+    tenant_id VARCHAR(256),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    deleted_at TIMESTAMP WITH TIME ZONE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS collections_name_unique ON collections(name) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS collections_user_id_idx ON collections(user_id);
+CREATE INDEX IF NOT EXISTS collections_status_idx ON collections(status);
+CREATE INDEX IF NOT EXISTS collections_tags_idx ON collections USING GIN (tags);
+CREATE INDEX IF NOT EXISTS collections_embedding_idx ON collections USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS collections_name_trgm_idx ON collections USING GIN (name gin_trgm_ops);
+
+-- Collection Sessions (junction table linking sessions to collections)
+CREATE TABLE IF NOT EXISTS collection_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    collection_id UUID NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    ordinal INTEGER DEFAULT 0,  -- Ordering within collection
+    notes TEXT,  -- Why session was included
+    graph_edges JSONB DEFAULT '[]',
+    metadata JSONB DEFAULT '{}',
+    tags TEXT[] DEFAULT '{}',
+    user_id VARCHAR(256),
+    tenant_id VARCHAR(256),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT collection_session_unique UNIQUE (collection_id, session_id)
+);
+CREATE INDEX IF NOT EXISTS collection_sessions_collection_id_idx ON collection_sessions(collection_id);
+CREATE INDEX IF NOT EXISTS collection_sessions_session_id_idx ON collection_sessions(session_id);
+
+-- Trigger to update collection session_count
+CREATE OR REPLACE FUNCTION update_collection_session_count()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        UPDATE collections SET session_count = session_count + 1, updated_at = NOW()
+        WHERE id = NEW.collection_id;
+        RETURN NEW;
+    ELSIF TG_OP = 'DELETE' THEN
+        UPDATE collections SET session_count = session_count - 1, updated_at = NOW()
+        WHERE id = OLD.collection_id;
+        RETURN OLD;
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS collection_sessions_count_trigger ON collection_sessions;
+CREATE TRIGGER collection_sessions_count_trigger
+AFTER INSERT OR DELETE ON collection_sessions
+FOR EACH ROW EXECUTE FUNCTION update_collection_session_count();
+
 -- Agent Time Machine (version history for agents)
 -- Note: No FK constraint on agent_id because we need to preserve history after agent deletion
 CREATE TABLE IF NOT EXISTS agent_timemachine (
@@ -364,6 +461,12 @@ CREATE TRIGGER scenario_kv_trigger
 AFTER INSERT OR UPDATE ON scenarios
 FOR EACH ROW EXECUTE FUNCTION update_kv_store();
 
+-- Trigger for collections
+DROP TRIGGER IF EXISTS collection_kv_trigger ON collections;
+CREATE TRIGGER collection_kv_trigger
+AFTER INSERT OR UPDATE ON collections
+FOR EACH ROW EXECUTE FUNCTION update_kv_store();
+
 -- Trigger for agents
 DROP TRIGGER IF EXISTS agent_kv_trigger ON agents;
 CREATE TRIGGER agent_kv_trigger
@@ -430,6 +533,18 @@ FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 DROP TRIGGER IF EXISTS tools_updated_at ON tools;
 CREATE TRIGGER tools_updated_at BEFORE UPDATE ON tools
+FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS feedback_updated_at ON feedback;
+CREATE TRIGGER feedback_updated_at BEFORE UPDATE ON feedback
+FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS collections_updated_at ON collections;
+CREATE TRIGGER collections_updated_at BEFORE UPDATE ON collections
+FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS collection_sessions_updated_at ON collection_sessions;
+CREATE TRIGGER collection_sessions_updated_at BEFORE UPDATE ON collection_sessions
 FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- ============================================
@@ -577,6 +692,18 @@ BEGIN
           AND (p_user_id IS NULL OR s.user_id = p_user_id OR s.user_id IS NULL)
           AND 1 - (s.embedding <=> p_query_embedding) >= p_min_similarity
         ORDER BY s.embedding <=> p_query_embedding
+        LIMIT p_limit;
+    ELSIF p_table_name = 'collections' THEN
+        RETURN QUERY
+        SELECT c.id, c.name, c.description as content,
+               1 - (c.embedding <=> p_query_embedding) as similarity,
+               to_jsonb(c) - 'embedding' as data
+        FROM collections c
+        WHERE c.embedding IS NOT NULL
+          AND c.deleted_at IS NULL
+          AND (p_user_id IS NULL OR c.user_id = p_user_id OR c.user_id IS NULL)
+          AND 1 - (c.embedding <=> p_query_embedding) >= p_min_similarity
+        ORDER BY c.embedding <=> p_query_embedding
         LIMIT p_limit;
     ELSIF p_table_name = 'agents' THEN
         RETURN QUERY
@@ -777,6 +904,23 @@ DROP TRIGGER IF EXISTS scenarios_embedding_queue ON scenarios;
 CREATE TRIGGER scenarios_embedding_queue
 AFTER INSERT OR UPDATE OF description ON scenarios
 FOR EACH ROW EXECUTE FUNCTION queue_scenario_embedding();
+
+-- Collection embedding queue
+CREATE OR REPLACE FUNCTION queue_collection_embedding()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.embedding IS NULL AND NEW.description IS NOT NULL THEN
+        INSERT INTO embedding_queue (table_name, record_id, content)
+        VALUES ('collections', NEW.id, COALESCE(NEW.name || ': ', '') || NEW.description);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS collections_embedding_queue ON collections;
+CREATE TRIGGER collections_embedding_queue
+AFTER INSERT OR UPDATE OF description ON collections
+FOR EACH ROW EXECUTE FUNCTION queue_collection_embedding();
 
 -- Agent embedding queue
 -- Uses description if provided, otherwise falls back to content for embedding

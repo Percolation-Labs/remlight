@@ -95,14 +95,23 @@ class ScenarioResponse(BaseModel):
 
 
 class FeedbackRequest(BaseModel):
-    """Request model for submitting feedback via Phoenix."""
+    """Request model for submitting feedback.
 
-    trace_id: str | None = None
-    span_id: str | None = None
-    name: str = "user_feedback"  # Annotation name
+    Feedback is stored locally AND optionally sent to Phoenix.
+    This dual storage enables:
+    - Local analysis and evaluation workflows
+    - Phoenix observability integration
+    """
+
+    session_id: str | None = None  # Session being rated
+    message_id: str | None = None  # Specific message being rated
+    trace_id: str | None = None  # Phoenix/OTEL trace ID
+    span_id: str | None = None  # Phoenix/OTEL span ID
+    name: str = "user_feedback"  # Annotation type
     score: float | None = None  # 0.0 to 1.0
     label: str | None = None  # e.g., "thumbs_up", "thumbs_down", "relevant", "not_relevant"
     comment: str | None = None  # Free text feedback
+    source: str = "user"  # user, evaluator, automated
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -111,7 +120,8 @@ class FeedbackResponse(BaseModel):
 
     status: str
     message: str
-    annotation_id: str | None = None
+    feedback_id: str | None = None  # Local database ID
+    annotation_id: str | None = None  # Phoenix annotation ID (if OTEL enabled)
 
 
 # =============================================================================
@@ -347,93 +357,131 @@ async def list_scenarios(
 async def submit_feedback(
     feedback: FeedbackRequest,
     x_user_id: str | None = Header(None, alias="X-User-Id"),
+    x_tenant_id: str | None = Header(None, alias="X-Tenant-Id"),
 ) -> FeedbackResponse:
     """
-    Submit feedback on a trace/span via Phoenix.
+    Submit feedback on an agent response.
 
-    This endpoint sends annotation data to Phoenix's span annotation API.
+    Feedback is:
+    1. ALWAYS stored locally in the feedback table
+    2. OPTIONALLY sent to Phoenix if OTEL is enabled
+
+    This dual storage enables:
+    - Local evaluation workflows (evaluator agents, batch analysis)
+    - Phoenix observability integration (when enabled)
+
     Feedback can include:
+    - session_id/message_id: Link to the conversation
+    - trace_id/span_id: Link to Phoenix traces
     - score: Numeric rating (0.0 to 1.0)
     - label: Categorical label (e.g., "thumbs_up", "relevant")
     - comment: Free text feedback
-
-    Either trace_id or span_id should be provided to associate
-    the feedback with a specific trace or span.
+    - source: Who provided feedback (user, evaluator, automated)
     """
-    if not settings.otel.enabled:
-        return FeedbackResponse(
-            status="skipped",
-            message="OpenTelemetry/Phoenix integration is disabled",
-        )
+    import json as json_lib
 
-    if not feedback.trace_id and not feedback.span_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Either trace_id or span_id must be provided",
-        )
+    db = get_db()
+    await db.connect()
 
-    # Build annotation payload for Phoenix
-    annotation_data: dict[str, Any] = {
-        "name": feedback.name,
-        "annotator_kind": "HUMAN",
-    }
-
-    if feedback.trace_id:
-        annotation_data["trace_id"] = feedback.trace_id
-    if feedback.span_id:
-        annotation_data["span_id"] = feedback.span_id
-    if feedback.score is not None:
-        annotation_data["score"] = feedback.score
-    if feedback.label:
-        annotation_data["label"] = feedback.label
-    if feedback.comment:
-        annotation_data["explanation"] = feedback.comment
-
-    # Add metadata
-    metadata = feedback.metadata.copy()
-    if x_user_id:
-        metadata["user_id"] = x_user_id
-    if metadata:
-        annotation_data["metadata"] = metadata
-
-    # Send to Phoenix annotation API
-    phoenix_endpoint = settings.otel.collector_endpoint.rstrip("/")
-    annotation_url = f"{phoenix_endpoint}/v1/span_annotations"
-
+    # Store feedback locally first
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                annotation_url,
-                json={"data": [annotation_data]},
-                headers={"Content-Type": "application/json"},
+        # Convert metadata dict to JSON string for asyncpg JSONB
+        metadata_json = json_lib.dumps(feedback.metadata) if feedback.metadata else "{}"
+
+        result = await db.fetchrow(
+            """
+            INSERT INTO feedback (
+                session_id, message_id, trace_id, span_id, name, score, label, comment, source,
+                metadata, user_id, tenant_id
             )
-
-            if response.status_code in (200, 201):
-                result = response.json()
-                annotation_id = None
-                if isinstance(result, dict) and "data" in result:
-                    data = result["data"]
-                    if isinstance(data, list) and len(data) > 0:
-                        annotation_id = data[0].get("id")
-
-                return FeedbackResponse(
-                    status="success",
-                    message="Feedback submitted to Phoenix",
-                    annotation_id=annotation_id,
-                )
-            else:
-                return FeedbackResponse(
-                    status="error",
-                    message=f"Phoenix returned {response.status_code}: {response.text}",
-                )
-
-    except httpx.RequestError as e:
-        return FeedbackResponse(
-            status="error",
-            message=f"Failed to connect to Phoenix: {str(e)}",
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)
+            RETURNING id
+            """,
+            feedback.session_id,
+            feedback.message_id,
+            feedback.trace_id,
+            feedback.span_id,
+            feedback.name,
+            feedback.score,
+            feedback.label,
+            feedback.comment,
+            feedback.source,
+            metadata_json,
+            x_user_id,
+            x_tenant_id or x_user_id,
         )
+        feedback_id = str(result["id"]) if result else None
     except Exception as e:
-        return FeedbackResponse(
-            status="error",
-            message=f"Unexpected error: {str(e)}",
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to store feedback: {str(e)}",
         )
+
+    # Optionally send to Phoenix if OTEL is enabled
+    annotation_id = None
+    phoenix_status = "skipped"
+
+    if settings.otel.enabled and (feedback.trace_id or feedback.span_id):
+        # Build annotation payload for Phoenix
+        annotation_data: dict[str, Any] = {
+            "name": feedback.name,
+            "annotator_kind": "HUMAN" if feedback.source == "user" else "LLM",
+        }
+
+        if feedback.trace_id:
+            annotation_data["trace_id"] = feedback.trace_id
+        if feedback.span_id:
+            annotation_data["span_id"] = feedback.span_id
+        if feedback.score is not None:
+            annotation_data["score"] = feedback.score
+        if feedback.label:
+            annotation_data["label"] = feedback.label
+        if feedback.comment:
+            annotation_data["explanation"] = feedback.comment
+
+        # Add metadata
+        metadata = feedback.metadata.copy()
+        if x_user_id:
+            metadata["user_id"] = x_user_id
+        if feedback_id:
+            metadata["feedback_id"] = feedback_id
+        if metadata:
+            annotation_data["metadata"] = metadata
+
+        # Send to Phoenix annotation API
+        phoenix_endpoint = settings.otel.collector_endpoint.rstrip("/")
+        annotation_url = f"{phoenix_endpoint}/v1/span_annotations"
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    annotation_url,
+                    json={"data": [annotation_data]},
+                    headers={"Content-Type": "application/json"},
+                )
+
+                if response.status_code in (200, 201):
+                    result = response.json()
+                    if isinstance(result, dict) and "data" in result:
+                        data = result["data"]
+                        if isinstance(data, list) and len(data) > 0:
+                            annotation_id = data[0].get("id")
+                    phoenix_status = "success"
+                else:
+                    phoenix_status = f"error: {response.status_code}"
+
+        except httpx.RequestError:
+            phoenix_status = "error: connection failed"
+        except Exception:
+            phoenix_status = "error: unexpected"
+
+    message = f"Feedback stored locally (id={feedback_id})"
+    if settings.otel.enabled:
+        message += f", Phoenix: {phoenix_status}"
+
+    return FeedbackResponse(
+        status="success",
+        message=message,
+        feedback_id=feedback_id,
+        annotation_id=annotation_id,
+    )

@@ -1,0 +1,233 @@
+$defs:
+  Milestone:
+    description: 'You plan and manage project milestones.
+
+
+      ## Algorithm
+
+      1. Identify milestones, releases, or deadlines in the input
+
+      2. Generate milestone_id (M-001, M-002, ...)
+
+      3. Extract target_date in YYYY-MM-DD format
+
+      4. Link relevant task_ids to the milestone
+
+      5. Use set_deadline to persist
+
+
+      ## Rules
+
+      - Convert date formats to YYYY-MM-DD
+
+      - Verify linked tasks exist before associating
+
+      - Flag if task estimates exceed time to milestone
+
+      - One milestone per major deliverable or release'
+    properties:
+      milestone_id:
+        description: 'Unique identifier. Format: M-NNN'
+        title: Milestone Id
+        type: string
+      name:
+        description: Milestone name (e.g., 'Beta Release', 'v1.0')
+        title: Name
+        type: string
+      target_date:
+        description: 'Target date. Format: YYYY-MM-DD'
+        title: Target Date
+        type: string
+      task_ids:
+        description: Task IDs that must complete for this milestone
+        items:
+          type: string
+        title: Task Ids
+        type: array
+    required:
+    - milestone_id
+    - name
+    - target_date
+    title: Milestone
+    tools:
+    - description: Set or update milestone date
+      name: set_deadline
+    - description: Associate tasks with milestone
+      name: link_tasks
+    type: object
+  Task:
+    description: 'You extract tasks from input and return structured JSON.
+
+
+      ## Algorithm
+
+      1. Identify distinct tasks or work items in the input
+
+      2. Generate a unique task_id for each (T-001, T-002, ...)
+
+      3. Extract title, assignee, status, and estimated_hours
+
+      4. Call create_task to persist each task
+
+
+      ## Rules
+
+      - task_id format: T-NNN (e.g., T-001)
+
+      - status must be one of: pending, in_progress, done, blocked
+
+      - If no status mentioned, default to pending
+
+      - estimated_hours: extract if stated, otherwise leave null
+
+      - Check assignee availability before confirming assignment'
+    override_temperature: 0.0
+    properties:
+      task_id:
+        description: 'Unique identifier. Format: T-NNN'
+        title: Task Id
+        type: string
+      title:
+        description: Brief task title describing the work
+        title: Title
+        type: string
+      assignee:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        description: Team member assigned. Verify availability first.
+        title: Assignee
+      status:
+        default: pending
+        description: pending | in_progress | done | blocked
+        title: Status
+        type: string
+      estimated_hours:
+        anyOf:
+        - type: number
+        - type: 'null'
+        default: null
+        description: Estimated hours to complete. Null if unknown.
+        title: Estimated Hours
+    required:
+    - task_id
+    - title
+    structured_output: true
+    title: Task
+    tools:
+    - description: Persist task to project store
+      name: create_task
+    - description: Change task status
+      name: update_status
+    type: object
+  TeamMember:
+    description: 'You extract and manage team member information.
+
+
+      ## Algorithm
+
+      1. Identify team members mentioned in the input
+
+      2. Extract name, role, and capacity if stated
+
+      3. Use lookup_user to verify against known users
+
+      4. Use check_availability to get current capacity
+
+
+      ## Rules
+
+      - capacity_hours defaults to 40 if not specified
+
+      - Flag if capacity < 10 hours (limited availability)
+
+      - Role should match standard titles when possible'
+    properties:
+      name:
+        description: Full name of the team member
+        title: Name
+        type: string
+      role:
+        description: Job title or role (e.g., 'Engineer', 'Designer')
+        title: Role
+        type: string
+      capacity_hours:
+        default: 40.0
+        description: Available hours per week. Default 40. Flag if < 10.
+        title: Capacity Hours
+        type: number
+    required:
+    - name
+    - role
+    title: TeamMember
+    tools:
+    - description: Find user by name or email
+      name: lookup_user
+    - description: Get available hours for date range
+      name: check_availability
+    type: object
+description: "You coordinate project management by routing to specialist handlers.\n\
+  \n## Algorithm\n1. Analyze the user request\n2. Match keywords to determine which\
+  \ fragment(s) are involved:\n   - team/members/assign/capacity → delegate to team\
+  \ handler\n   - task/todo/work/backlog → delegate to tasks handler\n   - milestone/deadline/release\
+  \ → delegate to milestones handler\n3. Use ask_agent to delegate with relevant context\n\
+  4. Aggregate results and respond\n\n## Rules\n- Use read_resource to get user context\
+  \ before routing\n- Multiple fragments may be involved (e.g., \"assign task\" →\
+  \ tasks + team)\n- Always delegate extraction work; do not extract directly\n- Report\
+  \ aggregated status: success, partial, or failed"
+properties:
+  name:
+    description: Project name
+    title: Name
+    type: string
+  description:
+    description: Project description and goals
+    title: Description
+    type: string
+  team:
+    description: Team members. Route team queries here.
+    items:
+      $ref: '#/$defs/TeamMember'
+    title: Team
+    triggers:
+    - team
+    - members
+    - assign
+    - capacity
+    - who
+    type: array
+  tasks:
+    description: Project tasks. Route task queries here.
+    items:
+      $ref: '#/$defs/Task'
+    title: Tasks
+    triggers:
+    - task
+    - todo
+    - work
+    - backlog
+    - status
+    type: array
+  milestones:
+    description: Milestones. Route planning queries here.
+    items:
+      $ref: '#/$defs/Milestone'
+    title: Milestones
+    triggers:
+    - milestone
+    - deadline
+    - release
+    - schedule
+    - when
+    type: array
+required:
+- name
+- description
+title: Project
+tools:
+- description: Delegate to specialist handler
+  name: ask_agent
+- description: Read user://profile or project://config
+  name: read_resource
+type: object

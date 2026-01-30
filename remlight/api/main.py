@@ -42,6 +42,7 @@ from remlight.api.routers.agents import router as agents_router
 from remlight.api.routers.sessions import router as sessions_router, init_sessions
 from remlight.api.routers.models import router as models_router
 from remlight.api.routers.servers import router as servers_router
+from remlight.api.routers.collections import router as collections_router, init_collections
 from remlight.api.routers.tools_registry import router as tools_registry_router
 from remlight.api.routers.ontology import router as ontology_router
 
@@ -60,9 +61,10 @@ async def lifespan(app: FastAPI):
     db = get_db()
     await db.connect()
 
-    # Initialize tools, sessions, and MCP with database
+    # Initialize tools, sessions, collections, and MCP with database
     init_tools(db)
     init_sessions(db)
+    init_collections(db)
     init_mcp(db)
 
     # Auto-register tools if enabled
@@ -112,6 +114,7 @@ def create_app() -> FastAPI:
     app.include_router(scenarios_router, prefix="/api/v1")
     app.include_router(agents_router, prefix="/api/v1")
     app.include_router(sessions_router, prefix="/api/v1")
+    app.include_router(collections_router, prefix="/api/v1")
     app.include_router(models_router, prefix="/api/v1")
     app.include_router(servers_router, prefix="/api/v1")
     app.include_router(tools_registry_router, prefix="/api/v1")
@@ -137,6 +140,7 @@ def create_app() -> FastAPI:
                 "mcp_tools": "/api/v1/mcp-tools",
                 "scenarios": "/api/v1/scenarios",
                 "feedback": "/api/v1/scenarios/feedback",
+                "collections": "/api/v1/collections",
                 "agents": "/api/v1/agents",
                 "sessions": "/api/v1/sessions",
                 "models": "/api/v1/models",

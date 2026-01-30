@@ -980,6 +980,248 @@ async def save_agent(
 # =============================================================================
 
 
+async def analyze_pages(
+    file_uri: str,
+    start_page: int = 1,
+    end_page: int | None = None,
+    prompt: str | None = None,
+    provider: str = "anthropic",
+    model: str | None = None,
+    page_batch_size: int = 5,
+) -> dict[str, Any]:
+    """
+    Analyze document pages using vision AI models.
+
+    Converts PDF pages or images to vision-ready format and analyzes them
+    using multimodal LLMs (Claude, GPT-4, Gemini).
+
+    Args:
+        file_uri: File path or URI (local path, s3://, https://)
+        start_page: First page to analyze (1-indexed, default: 1)
+        end_page: Last page to analyze (default: all pages)
+        prompt: Analysis prompt (default: generic page description)
+        provider: Vision provider - 'anthropic', 'openai', or 'gemini' (default: anthropic)
+        model: Model override (e.g., 'claude-sonnet-4.5', 'gpt-4.1')
+        page_batch_size: Number of pages per API call (default: 5)
+
+    Returns:
+        Dict with:
+            - status: 'success' or 'error'
+            - description: Combined analysis text
+            - page_count: Number of pages analyzed
+            - provider: Vision provider used
+            - model: Model used
+            - usage: Token usage stats
+
+    Examples:
+        analyze_pages("invoice.pdf")
+        analyze_pages("s3://bucket/doc.pdf", start_page=1, end_page=3)
+        analyze_pages("image.png", prompt="Extract all text from this image")
+        analyze_pages("report.pdf", provider="openai", model="gpt-4.1")
+    """
+    import tempfile
+    from pathlib import Path
+
+    from loguru import logger
+
+    from remlight.services.vision import (
+        VisionProvider,
+        analyze_image_async,
+        analyze_images_async,
+    )
+
+    # Default prompt for generic page analysis
+    default_prompt = """Analyze this page and provide a detailed description of its contents.
+Include:
+- Document type and structure
+- Key text and data
+- Tables, charts, or images present
+- Any notable formatting or layout"""
+
+    analysis_prompt = prompt or default_prompt
+
+    # Map provider string to enum
+    provider_map = {
+        "anthropic": VisionProvider.ANTHROPIC,
+        "openai": VisionProvider.OPENAI,
+        "gemini": VisionProvider.GEMINI,
+    }
+    vision_provider = provider_map.get(provider.lower(), VisionProvider.ANTHROPIC)
+
+    try:
+        # Resolve file URI to local path
+        local_path = None
+
+        if file_uri.startswith("s3://"):
+            # Download from S3
+            import aioboto3
+
+            parts = file_uri[5:].split("/", 1)
+            bucket = parts[0]
+            key = parts[1] if len(parts) > 1 else ""
+
+            session = aioboto3.Session()
+            async with session.client("s3") as s3:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=Path(key).suffix) as f:
+                    await s3.download_fileobj(bucket, key, f)
+                    local_path = f.name
+
+        elif file_uri.startswith(("http://", "https://")):
+            # Download from URL
+            import httpx
+
+            async with httpx.AsyncClient() as client:
+                response = await client.get(file_uri)
+                response.raise_for_status()
+
+                suffix = Path(file_uri.split("?")[0]).suffix or ".pdf"
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as f:
+                    f.write(response.content)
+                    local_path = f.name
+
+        else:
+            # Local file path
+            if file_uri.startswith("file://"):
+                local_path = file_uri[7:]  # Remove "file://" prefix
+            else:
+                local_path = file_uri
+
+        path = Path(local_path)
+        if not path.exists():
+            return {
+                "status": "error",
+                "error": f"File not found: {local_path}",
+                "file_uri": file_uri,
+            }
+
+        # Check file type
+        suffix = path.suffix.lower()
+
+        if suffix == ".pdf":
+            # PDF - convert pages to images using PyMuPDF
+            import fitz  # pymupdf
+
+            doc = fitz.open(str(path))
+            total_pages = len(doc)
+
+            # Determine page range
+            first_page = max(1, start_page) - 1  # Convert to 0-indexed
+            last_page = min(end_page or total_pages, total_pages)
+
+            logger.info(f"Analyzing PDF pages {first_page + 1}-{last_page} of {total_pages}")
+
+            # Collect all page images
+            page_images: list[tuple[bytes, str]] = []
+
+            for page_num in range(first_page, last_page):
+                page = doc[page_num]
+                # Render at 150 DPI for good quality without excessive size
+                pix = page.get_pixmap(matrix=fitz.Matrix(150/72, 150/72))
+                img_bytes = pix.tobytes("png")
+                page_images.append((img_bytes, "image/png"))
+
+            doc.close()
+
+            # Analyze in batches
+            all_descriptions = []
+            total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "requests": 0}
+
+            for i in range(0, len(page_images), page_batch_size):
+                batch = page_images[i:i + page_batch_size]
+                batch_start = first_page + i + 1
+                batch_end = batch_start + len(batch) - 1
+
+                batch_prompt = f"{analysis_prompt}\n\nAnalyzing pages {batch_start}-{batch_end}."
+
+                if len(batch) == 1:
+                    result = await analyze_image_async(
+                        image_data=batch[0][0],
+                        prompt=batch_prompt,
+                        provider=vision_provider,
+                        media_type=batch[0][1],
+                        model=model,
+                    )
+                else:
+                    result = await analyze_images_async(
+                        images=batch,
+                        prompt=batch_prompt,
+                        provider=vision_provider,
+                        model=model,
+                    )
+
+                all_descriptions.append(result.description)
+
+                # Accumulate usage
+                for key in total_usage:
+                    total_usage[key] += result.usage.get(key, 0)
+
+            combined_description = "\n\n---\n\n".join(all_descriptions)
+
+            return {
+                "status": "success",
+                "description": combined_description,
+                "page_count": len(page_images),
+                "total_pages": total_pages,
+                "provider": vision_provider.value,
+                "model": result.model if 'result' in dir() else model,
+                "usage": total_usage,
+                "file_uri": file_uri,
+            }
+
+        elif suffix in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+            # Single image file
+            image_data = path.read_bytes()
+            media_type = {
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".gif": "image/gif",
+                ".webp": "image/webp",
+            }.get(suffix, "image/png")
+
+            result = await analyze_image_async(
+                image_data=image_data,
+                prompt=analysis_prompt,
+                provider=vision_provider,
+                media_type=media_type,
+                model=model,
+            )
+
+            return {
+                "status": "success",
+                "description": result.description,
+                "page_count": 1,
+                "provider": result.provider.value,
+                "model": result.model,
+                "usage": result.usage,
+                "file_uri": file_uri,
+            }
+
+        else:
+            return {
+                "status": "error",
+                "error": f"Unsupported file type: {suffix}. Supported: PDF, PNG, JPG, GIF, WEBP",
+                "file_uri": file_uri,
+            }
+
+    except Exception as e:
+        logger.exception(f"Vision analysis failed for {file_uri}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "file_uri": file_uri,
+        }
+
+    finally:
+        # Cleanup temp files (only if we downloaded from S3 or URL)
+        original_path = file_uri[7:] if file_uri.startswith("file://") else file_uri
+        if local_path and local_path != original_path:
+            try:
+                Path(local_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
 @router.post("/search")
 async def search_endpoint(request: SearchRequest) -> dict[str, Any]:
     """REST endpoint for search tool."""

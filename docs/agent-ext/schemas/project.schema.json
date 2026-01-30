@@ -1,0 +1,225 @@
+{
+  "$defs": {
+    "Milestone": {
+      "description": "A project milestone with target date and linked tasks.\n\n## Planning Guidelines\n- Link related tasks to milestones\n- Verify task estimates fit within timeline\n- Flag scheduling conflicts",
+      "properties": {
+        "milestone_id": {
+          "description": "Unique identifier (e.g., 'M-001')",
+          "title": "Milestone Id",
+          "type": "string"
+        },
+        "name": {
+          "description": "Milestone name (e.g., 'Beta Release')",
+          "title": "Name",
+          "type": "string"
+        },
+        "target_date": {
+          "description": "Target date in YYYY-MM-DD format",
+          "title": "Target Date",
+          "type": "string"
+        },
+        "task_ids": {
+          "description": "Tasks that must complete for this milestone",
+          "items": {
+            "type": "string"
+          },
+          "title": "Task Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "milestone_id",
+        "name",
+        "target_date"
+      ],
+      "title": "Milestone",
+      "tools": [
+        {
+          "description": "Set or update milestone target date",
+          "name": "set_deadline"
+        },
+        {
+          "description": "Associate tasks with milestone",
+          "name": "link_tasks"
+        }
+      ],
+      "type": "object"
+    },
+    "Task": {
+      "description": "A unit of work within a project.\n\n## Extraction Rules\n- Each task needs task_id, title, status\n- Estimate hours when information is available\n- Use status: pending | in_progress | done | blocked",
+      "override_temperature": 0.0,
+      "properties": {
+        "task_id": {
+          "description": "Unique identifier (e.g., 'T-001')",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "title": {
+          "description": "Brief task title describing the work",
+          "title": "Title",
+          "type": "string"
+        },
+        "assignee": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Team member assigned. Check availability before assigning.",
+          "title": "Assignee"
+        },
+        "status": {
+          "default": "pending",
+          "description": "One of: pending, in_progress, done, blocked",
+          "title": "Status",
+          "type": "string"
+        },
+        "estimated_hours": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Estimated hours to complete. Use historical data if available.",
+          "title": "Estimated Hours"
+        }
+      },
+      "required": [
+        "task_id",
+        "title"
+      ],
+      "structured_output": true,
+      "title": "Task",
+      "tools": [
+        {
+          "description": "Persist new task to project store",
+          "name": "create_task"
+        },
+        {
+          "description": "Change task status",
+          "name": "update_status"
+        }
+      ],
+      "type": "object"
+    },
+    "TeamMember": {
+      "description": "Team member with role and capacity information.\n\nExtract or update team member details including their role\nand available capacity for task assignment.",
+      "properties": {
+        "name": {
+          "description": "Full name of the team member",
+          "title": "Name",
+          "type": "string"
+        },
+        "role": {
+          "description": "Job title or role (e.g., 'Engineer', 'Designer')",
+          "title": "Role",
+          "type": "string"
+        },
+        "capacity_hours": {
+          "default": 40.0,
+          "description": "Available hours per week for task assignment. Flag if < 10.",
+          "title": "Capacity Hours",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "role"
+      ],
+      "title": "TeamMember",
+      "tools": [
+        {
+          "description": "Find user by name or email",
+          "name": "lookup_user"
+        },
+        {
+          "description": "Get available hours for user in date range",
+          "name": "check_availability"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  "description": "A project with team, tasks, and milestones.\n\nThe schema structure defines delegation boundaries:\n- team: queries about members, capacity, assignments\n- tasks: queries about work items, status, backlog\n- milestones: queries about deadlines, scheduling, releases",
+  "properties": {
+    "name": {
+      "description": "Project name",
+      "title": "Name",
+      "type": "string"
+    },
+    "description": {
+      "description": "Project description and goals",
+      "title": "Description",
+      "type": "string"
+    },
+    "team": {
+      "description": "Team members available for task assignment",
+      "items": {
+        "$ref": "#/$defs/TeamMember"
+      },
+      "title": "Team",
+      "triggers": [
+        "team",
+        "members",
+        "assign",
+        "capacity",
+        "who"
+      ],
+      "type": "array"
+    },
+    "tasks": {
+      "description": "Project tasks and work items",
+      "items": {
+        "$ref": "#/$defs/Task"
+      },
+      "title": "Tasks",
+      "triggers": [
+        "task",
+        "todo",
+        "work",
+        "backlog",
+        "status"
+      ],
+      "type": "array"
+    },
+    "milestones": {
+      "description": "Project milestones and deadlines",
+      "items": {
+        "$ref": "#/$defs/Milestone"
+      },
+      "title": "Milestones",
+      "triggers": [
+        "milestone",
+        "deadline",
+        "release",
+        "schedule",
+        "when"
+      ],
+      "type": "array"
+    }
+  },
+  "required": [
+    "name",
+    "description"
+  ],
+  "title": "Project",
+  "tools": [
+    {
+      "description": "Delegate to specialist handler",
+      "name": "ask_agent"
+    },
+    {
+      "description": "Read MCP resource (user://profile)",
+      "name": "read_resource"
+    }
+  ],
+  "type": "object"
+}

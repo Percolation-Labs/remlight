@@ -1,16 +1,17 @@
 """Sessions router - List and retrieve chat sessions.
 
 Provides endpoints to list sessions and retrieve session messages
-from the database.
+from the database. Includes session cloning for evaluation workflows.
 """
 
+import uuid
 from datetime import datetime
 from typing import Any
 
 import yaml
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from remlight.services.database import get_db
 
@@ -62,6 +63,24 @@ class SessionMessagesResponse(BaseModel):
     """Session messages response."""
 
     messages: list[MessageInfo]
+
+
+class SessionCloneRequest(BaseModel):
+    """Request to clone a session."""
+
+    new_name: str | None = None  # Optional new name for cloned session
+    include_messages: bool = True  # Whether to copy messages
+    truncate_at_message: int | None = None  # Clone only up to N messages
+    add_to_collection: str | None = None  # Optional collection ID to add to
+
+
+class SessionCloneResponse(BaseModel):
+    """Response from session clone operation."""
+
+    original_session_id: str
+    new_session_id: str
+    message_count: int
+    name: str | None = None
 
 
 @router.get("", response_model=SessionListResponse)
@@ -357,3 +376,128 @@ async def export_session(
     except Exception as e:
         print(f"Failed to export session: {e}")
         raise HTTPException(status_code=500, detail="Failed to export session")
+
+
+@router.post("/{session_id}/clone", response_model=SessionCloneResponse)
+async def clone_session(
+    session_id: str,
+    clone_request: SessionCloneRequest | None = None,
+    x_user_id: str | None = Header(None, alias="X-User-Id"),
+    x_tenant_id: str | None = Header(None, alias="X-Tenant-Id"),
+) -> SessionCloneResponse:
+    """Clone a session with its messages.
+
+    Creates a new session with copies of the original session's messages.
+    Useful for:
+    - Creating test cases from real conversations
+    - Building evaluation datasets
+    - Replaying conversations with modifications
+
+    Args:
+        session_id: The source session UUID to clone
+        clone_request: Optional clone configuration
+        x_user_id: User ID for the new session
+        x_tenant_id: Tenant ID for the new session
+    """
+    if not _db:
+        raise HTTPException(status_code=500, detail="Database not available")
+
+    clone_request = clone_request or SessionCloneRequest()
+
+    try:
+        # Get original session
+        session_query = """
+            SELECT id, name, description, agent_name, status, metadata, tags
+            FROM sessions
+            WHERE id = $1
+        """
+        session_row = await _db.fetchrow(session_query, session_id)
+
+        if not session_row:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        # Create new session
+        new_session_id = str(uuid.uuid4())
+        new_name = clone_request.new_name or f"Clone of {session_row['name'] or session_id}"
+
+        insert_session = """
+            INSERT INTO sessions (id, name, description, agent_name, status, metadata, tags, user_id, tenant_id)
+            VALUES ($1, $2, $3, $4, 'active', $5, $6, $7, $8)
+        """
+        await _db.execute(
+            insert_session,
+            new_session_id,
+            new_name,
+            session_row["description"],
+            session_row["agent_name"],
+            session_row["metadata"] or {},
+            session_row["tags"] or [],
+            x_user_id,
+            x_tenant_id or x_user_id,
+        )
+
+        message_count = 0
+
+        if clone_request.include_messages:
+            # Get messages from original session
+            limit_clause = ""
+            if clone_request.truncate_at_message:
+                limit_clause = f"LIMIT {clone_request.truncate_at_message}"
+
+            messages_query = f"""
+                SELECT role, content, tool_calls, metadata, tags, trace_id, span_id
+                FROM messages
+                WHERE session_id = $1
+                ORDER BY created_at ASC
+                {limit_clause}
+            """
+            message_rows = await _db.fetch(messages_query, session_id)
+
+            # Insert cloned messages
+            for row in message_rows:
+                new_msg_id = str(uuid.uuid4())
+                insert_msg = """
+                    INSERT INTO messages (id, session_id, role, content, tool_calls, metadata, tags, user_id, tenant_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                """
+                await _db.execute(
+                    insert_msg,
+                    new_msg_id,
+                    new_session_id,
+                    row["role"],
+                    row["content"],
+                    row["tool_calls"] or [],
+                    row["metadata"] or {},
+                    row["tags"] or [],
+                    x_user_id,
+                    x_tenant_id or x_user_id,
+                )
+                message_count += 1
+
+        # Optionally add to collection
+        if clone_request.add_to_collection:
+            add_to_collection = """
+                INSERT INTO collection_sessions (collection_id, session_id, user_id, tenant_id)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (collection_id, session_id) DO NOTHING
+            """
+            await _db.execute(
+                add_to_collection,
+                clone_request.add_to_collection,
+                new_session_id,
+                x_user_id,
+                x_tenant_id or x_user_id,
+            )
+
+        return SessionCloneResponse(
+            original_session_id=session_id,
+            new_session_id=new_session_id,
+            message_count=message_count,
+            name=new_name,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Failed to clone session: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clone session: {e}")

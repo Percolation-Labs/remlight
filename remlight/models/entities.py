@@ -308,3 +308,101 @@ class File(CoreModel):
             except json.JSONDecodeError:
                 return {}
         return v
+
+
+class Feedback(CoreModel):
+    """User feedback on agent responses.
+
+    Feedback is decoupled from Scenarios:
+    - Feedback: End-user ratings/comments on agent quality (thumbs up/down, scores)
+    - Scenarios: Admin-created test cases for evaluation
+
+    Feedback is stored locally AND optionally sent to Phoenix for observability.
+    Each feedback record links to a session/message via trace_id or span_id.
+
+    Attributes:
+        session_id: Reference to the session being rated
+        message_id: Optional reference to specific message
+        trace_id: Phoenix/OTEL trace ID for observability
+        span_id: Phoenix/OTEL span ID for observability
+        name: Annotation type (e.g., "user_feedback", "quality_rating")
+        score: Numeric rating (0.0 to 1.0)
+        label: Categorical label (e.g., "thumbs_up", "thumbs_down", "helpful")
+        comment: Free text feedback
+        source: Feedback source ("user", "evaluator", "automated")
+    """
+
+    session_id: UUID | str | None = None
+    message_id: UUID | str | None = None
+    trace_id: str | None = None
+    span_id: str | None = None
+    name: str = "user_feedback"
+    score: float | None = None
+    label: str | None = None
+    comment: str | None = None
+    source: str = "user"  # user, evaluator, automated
+
+
+class Collection(CoreModel):
+    """Collection of sessions for batch evaluation and testing.
+
+    Collections group sessions together for:
+    - Batch evaluation: Run evaluator agents across all sessions
+    - Test suites: Create reproducible test sets from real sessions
+    - Analysis: Compare agent performance across session groups
+
+    Sessions can be added to collections via:
+    - Manual selection
+    - Query-based rules (sessions matching certain criteria)
+    - Clone operations (copy sessions from other collections)
+
+    Collections are searchable by:
+    - Name (fuzzy text search)
+    - Description (semantic vector search via embeddings)
+    - Tags (array containment)
+
+    Attributes:
+        name: Collection name/identifier
+        description: Purpose and contents description (embedded for semantic search)
+        session_count: Cached count of sessions (updated on add/remove)
+        status: Collection status (active, archived, running, completed)
+        query_filter: Optional JSON query to auto-populate (saved search)
+    """
+
+    name: str
+    description: str | None = None
+    session_count: int = 0
+    status: str = "active"  # active, archived, running, completed
+    query_filter: dict[str, Any] | None = None  # Saved query for auto-population
+
+    # Embeddings: uses description for semantic search
+    model_config = {"embedding_field": "description"}
+
+    @field_validator("query_filter", mode="before")
+    @classmethod
+    def parse_query_filter(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return None
+        return v
+
+
+class CollectionSession(CoreModel):
+    """Junction table linking sessions to collections.
+
+    Allows many-to-many relationship between collections and sessions.
+    A session can belong to multiple collections.
+
+    Attributes:
+        collection_id: Reference to the parent collection
+        session_id: Reference to the session
+        ordinal: Optional ordering within the collection
+        notes: Optional notes about why session was included
+    """
+
+    collection_id: UUID | str
+    session_id: UUID | str
+    ordinal: int = 0
+    notes: str | None = None
