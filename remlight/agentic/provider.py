@@ -831,9 +831,13 @@ async def create_agent(
     # =========================================================================
     # Filter provided tools based on schema.json_schema_extra.tools configuration
     #
-    # Three cases:
-    # 1. tools not specified in schema → ALL provided tools available
-    # 2. tools: [] (empty list) → NO tools available (agent can't call tools)
+    # IMPORTANT: Only explicitly listed tools are available to agents.
+    # This prevents global tool leakage and ensures agents only have access
+    # to the tools they declare in their schema.
+    #
+    # Behavior:
+    # 1. tools not specified in schema → NO tools available
+    # 2. tools: [] (empty list) → NO tools available
     # 3. tools: [{name: "x"}] → only named tools available
     #
     # Remote server support:
@@ -844,11 +848,15 @@ async def create_agent(
 
     agent_tools = []
     schema_tools = meta.tools  # List of MCPToolReference or dicts
-    has_tool_filter = len(schema_tools) > 0 if schema_tools else False
+
+    # If no tools specified in schema, agent gets NO tools (avoid global tool leakage)
+    if not schema_tools:
+        logger.debug(f"Agent '{meta.name}' has no tools specified - no tools will be available")
+        schema_tools = []
 
     # Check if any tools reference remote servers
     has_remote_tools = False
-    for t in (schema_tools or []):
+    for t in schema_tools:
         server = None
         if hasattr(t, "server"):
             server = t.server
@@ -859,8 +867,9 @@ async def create_agent(
             break
 
     # Extract allowed tool names from schema (handles both MCPToolReference and dict)
+    # Only tools in this set will be available to the agent
     allowed_tool_names: set[str] = set()
-    for t in (schema_tools or []):
+    for t in schema_tools:
         if hasattr(t, "name"):  # MCPToolReference object
             allowed_tool_names.add(t.name)
         elif isinstance(t, dict) and "name" in t:  # Plain dict from YAML
@@ -870,14 +879,14 @@ async def create_agent(
     if has_remote_tools and schema_tools:
         from remlight.agentic.tool_resolver import resolve_tools
         agent_tools = await resolve_tools(schema_tools, tools, context)
-    elif tools:
-        # Local-only tools path (original behavior for backwards compatibility)
+    elif tools and allowed_tool_names:
+        # Local-only tools path - only add tools that are explicitly listed in schema
         if isinstance(tools, dict):
             # FastMCP format: {name: FunctionTool}
             # FunctionTool has .fn attribute with the actual callable
             for name, tool in tools.items():
-                # Apply filter: skip tools not in schema's allowed list
-                if has_tool_filter and name not in allowed_tool_names:
+                # Only add tools that are explicitly listed in schema
+                if name not in allowed_tool_names:
                     continue
                 # Extract callable from FunctionTool or use directly
                 if hasattr(tool, "fn"):
@@ -889,8 +898,8 @@ async def create_agent(
             # List of callables or FunctionTool objects
             for tool in tools:
                 tool_name = getattr(tool, "__name__", None) or getattr(tool, "name", None)
-                # Apply filter: skip tools not in schema's allowed list
-                if has_tool_filter and tool_name and tool_name not in allowed_tool_names:
+                # Only add tools that are explicitly listed in schema
+                if not tool_name or tool_name not in allowed_tool_names:
                     continue
                 if hasattr(tool, "fn"):
                     agent_tools.append(tool.fn)
