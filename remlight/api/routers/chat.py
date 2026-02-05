@@ -1,8 +1,8 @@
 """Chat completions router - OpenAI-compatible chat endpoint.
 
 Provides:
-- POST /chat/completions - OpenAI-compatible chat completions with streaming
-- Session persistence with X-Session-Id header
+- POST /chat/completions/{session_id} - OpenAI-compatible chat completions with session (preferred)
+- POST /chat/completions - OpenAI-compatible chat completions (session via X-Session-Id header)
 - Multi-agent support via X-Agent-Schema header
 """
 
@@ -62,23 +62,28 @@ Use action(type='observation', payload={confidence, sources}) to record metadata
     }
 
 
+@router.post("/completions/{session_id}")
 @router.post("/completions")
 async def chat_completions(
     request: ChatCompletionRequest,
     req: Request,
+    session_id: str | None = None,
 ):
     """
     OpenAI-compatible chat completions endpoint.
 
     Supports streaming SSE responses with session persistence.
 
-    Headers:
+    Session ID can be provided in two ways (URL parameter takes precedence):
+    - URL path: POST /chat/completions/{session_id} (preferred)
+    - Header: X-Session-Id
+
+    Other headers:
     - X-User-Id: User identifier
-    - X-Session-Id: Session identifier (enables multi-turn context)
     - X-Agent-Schema: Agent schema name or path
 
     The endpoint automatically:
-    1. Loads session history from the database (if X-Session-Id provided)
+    1. Loads session history from the database (if session_id provided)
     2. Saves user message before processing
     3. Saves assistant response after streaming completes
     4. Persists tool calls for context reconstruction
@@ -152,11 +157,12 @@ async def chat_completions(
         prompt = request.messages[-1].content if request.messages else ""
 
     # Load session history if session_id is provided
+    # URL parameter takes precedence over header
     message_history = None
-    session_id = context.session_id
+    effective_session_id = session_id or context.session_id
     user_id = context.user_id
 
-    if session_id:
+    if effective_session_id:
         try:
             from remlight.services.session import (
                 SessionMessageStore,
@@ -165,7 +171,7 @@ async def chat_completions(
 
             store = SessionMessageStore(user_id=user_id or "anonymous")
             raw_history = await store.load_session_messages(
-                session_id=session_id,
+                session_id=effective_session_id,
                 user_id=user_id,
                 compress_on_load=True,
             )
@@ -186,7 +192,7 @@ async def chat_completions(
 
         # Save user message BEFORE streaming
         await save_user_message(
-            session_id=session_id,
+            session_id=effective_session_id,
             user_id=user_id,
             content=prompt,
         )
@@ -204,7 +210,7 @@ async def chat_completions(
                 prompt=prompt,
                 model=request.model,
                 agent_schema=agent_schema_name,
-                session_id=session_id,
+                session_id=effective_session_id,
                 user_id=user_id,
                 context=context,
                 message_history=message_history,
@@ -220,7 +226,7 @@ async def chat_completions(
         result = await agent_runtime.agent.run(prompt, **run_kwargs)
 
         # Save assistant response
-        if session_id:
+        if effective_session_id:
             from remlight.services.session import SessionMessageStore
             from datetime import datetime, timezone
 
@@ -228,7 +234,7 @@ async def chat_completions(
 
             store = SessionMessageStore(user_id=user_id or "anonymous")
             await store.store_session_messages(
-                session_id=session_id,
+                session_id=effective_session_id,
                 messages=[{
                     "role": "assistant",
                     "content": output_str,

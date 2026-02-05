@@ -232,11 +232,10 @@ data: {"tool_name":"ask_agent","status":"completed","result":"Sentiment: positiv
 # Start server
 rem serve
 
-# In another terminal - test multi-agent
-curl -X POST http://localhost:8000/api/v1/chat/completions \
+# In another terminal - test multi-agent (session ID in URL path)
+curl -X POST http://localhost:8000/api/v1/chat/completions/sess-001 \
   -H "Content-Type: application/json" \
   -H "X-Agent-Schema: orchestrator-agent" \
-  -H "X-Session-Id: sess-001" \
   -d '{"messages":[{"role":"user","content":"Research attention mechanisms"}], "stream": true}'
 ```
 

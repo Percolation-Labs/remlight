@@ -55,11 +55,31 @@ OPENAI_API_KEY=sk-...
 | Endpoint | Method | Description |
 | -------- | ------ | ----------- |
 | `/health` | GET | Health check |
-| `/api/v1/chat/completions` | POST | OpenAI-compatible chat |
+| `/api/v1/chat/completions/{session_id}` | POST | OpenAI-compatible chat with session (preferred) |
+| `/api/v1/chat/completions` | POST | OpenAI-compatible chat (session via X-Session-Id header) |
 | `/api/v1/query` | POST | Execute REM query |
 | `/api/v1/mcp` | POST | MCP protocol |
 
 API docs at `http://localhost:8000/docs`
+
+### Chat Completions with Sessions
+
+For multi-turn conversations, pass the session ID in the URL path (preferred):
+
+```bash
+curl -X POST http://localhost:8000/api/v1/chat/completions/my-session-123 \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Hello!"}]}'
+```
+
+Alternatively, use the X-Session-Id header:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-Session-Id: my-session-123" \
+  -d '{"messages": [{"role": "user", "content": "Hello!"}]}'
+```
 
 ## See also
 

@@ -8,13 +8,20 @@ tags: [reference, headers, api, protocols]
 
 REM uses HTTP headers for context propagation across API requests.
 
+## Session ID
+
+Session ID can be provided in two ways (URL parameter takes precedence):
+
+1. **URL path (preferred)**: `POST /api/v1/chat/completions/{session_id}`
+2. **Header (fallback)**: `X-Session-Id`
+
 ## Request Headers
 
 | Header | Type | Required | Description |
 |--------|------|----------|-------------|
 | `X-User-Id` | string | No | User identifier (UUID5 hash of email). Fallback if JWT not present. |
 | `X-Tenant-Id` | string | No | Tenant/org identifier for data isolation. Default: `"default"` |
-| `X-Session-Id` | string | No | Session ID for multi-turn conversation continuity |
+| `X-Session-Id` | string | No | Session ID (fallback - prefer URL path parameter) |
 | `X-Agent-Schema` | string | No | Agent schema name (e.g., `"orchestrator-agent"`) |
 | `X-Model-Name` | string | No | LLM model override (e.g., `"openai:gpt-4.1"`) |
 | `X-Is-Eval` | boolean | No | Mark as evaluation session (`"true"`, `"1"`, `"yes"`) |
@@ -49,6 +56,22 @@ HTTP Request
 ```
 
 ## Example: Chat Request
+
+**Using URL path for session ID (preferred):**
+
+```bash
+curl -N -X POST http://localhost:8000/api/v1/chat/completions/sess-456 \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: user-123" \
+  -H "X-Agent-Schema: orchestrator-agent" \
+  -H "X-Model-Name: anthropic:claude-sonnet-4-5-20250929" \
+  -d '{
+    "messages": [{"role": "user", "content": "Research neural networks"}],
+    "stream": true
+  }'
+```
+
+**Using header for session ID (fallback):**
 
 ```bash
 curl -N -X POST http://localhost:8000/api/v1/chat/completions \
