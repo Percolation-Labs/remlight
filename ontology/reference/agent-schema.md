@@ -56,18 +56,24 @@ json_schema_extra:
 
 ## Tool Access
 
+Only explicitly listed tools are available to agents. This prevents global tool leakage and ensures agents only have access to the tools they declare.
+
 ```yaml
-# All tools (default)
+# No tools (default - omit or empty list)
 tools: []
 
 # Specific tools only
 tools:
   - name: search
+  - name: action
 
-# No tools (structured output only)
-tools: []
-structured_output: true
+# Tools from remote MCP server
+tools:
+  - name: fetch_data
+    server: data-service
 ```
+
+**Important:** If no `tools` list is specified or if it's empty, the agent has NO tools available.
 
 ## Loading
 
