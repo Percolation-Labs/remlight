@@ -404,6 +404,8 @@ class AgentSchema(BaseModel):
         Loads defaults from schema and settings, allows runtime overrides.
         Returns dict with pydantic-ai compatible keys (model, model_settings, etc.)
 
+        Priority: override > schema > settings default
+
         Example:
             options = schema.get_options()
             agent = Agent(**options, system_prompt=..., toolsets=...)
@@ -421,9 +423,14 @@ class AgentSchema(BaseModel):
 
         extra = self.json_schema_extra
 
-        # Get values: override > schema > settings default
+        # Priority: override > schema > settings default
         model = overrides.get("model") or extra.model or settings.llm.default_model
-        temperature = overrides.get("temperature") if "temperature" in overrides else extra.temperature
+        temperature = (
+            overrides.get("temperature")
+            if "temperature" in overrides
+            else extra.temperature if extra.temperature is not None
+            else settings.llm.temperature
+        )
 
         # Build pydantic-ai compatible kwargs
         options: dict[str, Any] = {"model": model}

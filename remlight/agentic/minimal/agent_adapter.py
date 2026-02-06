@@ -187,7 +187,7 @@ class AgentAdapter:
         self._agent = Agent(
             #typically comes from the object description/docstring with some formatting
             system_prompt=self._schema.get_system_prompt(),
-            #the schema when structure_output is true only
+            #the schema when structure_output is true only (we remove docstring/description)
             output_type=self._schema.to_output_schema(),
             toolsets=toolsets,
             #options like model, temperature, usage_limits just passed through
