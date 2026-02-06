@@ -98,7 +98,7 @@ async def main(prompt: str, session_id: UUID, save_examples: bool = False, **inp
     adapter = AgentAdapter(schema, **input_options)
 
     # 4. Stream
-    sse_events = []
+    sse_events = []  #save for output example
     async with adapter.run_stream(prompt, message_history=messages or None) as result:
         #stream first and collet after
         async for event in result.stream_openai_sse():
@@ -109,7 +109,6 @@ async def main(prompt: str, session_id: UUID, save_examples: bool = False, **inp
 
     # 5. Save
     await message_repo.upsert(messages)
-    print(f"[{len(messages)} messages saved]")
 
     if save_examples:
         save_example_outputs(prompt, session_id, sse_events, messages)
