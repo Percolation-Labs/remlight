@@ -50,8 +50,7 @@ from typing import Any, Callable
 import httpx
 from loguru import logger
 
-from remlight.agentic.schema import MCPToolReference
-from remlight.agentic.context import AgentContext
+from remlight.agentic.agent_schema import AgentContext, MCPToolReference
 from remlight.models.entities import Server
 from remlight.services.repository import Repository
 

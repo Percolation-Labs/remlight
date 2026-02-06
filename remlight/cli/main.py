@@ -4,6 +4,7 @@ import asyncio
 import re
 import sys
 from pathlib import Path
+from uuid import UUID
 
 import click
 import yaml
@@ -49,36 +50,29 @@ async def _ask_async(
     model: str | None,
     stream: bool,
 ):
-    """Async implementation of ask command."""
-    import uuid as uuid_module
-
-    from remlight.agentic import (
-        AgentContext,
-        create_agent,
-        run_streaming,
-        run_sync,
-        schema_from_yaml_file,
-    )
-    from remlight.agentic.streaming import is_simulator_agent, stream_simulator_plain
-    from remlight.api.mcp_main import get_mcp_tools, init_mcp
+    """Async implementation of ask command using AgentAdapter."""
+    from remlight.agentic.adapter import AgentAdapter, print_sse
+    from remlight.agentic.agent_schema import AgentSchema
+    from remlight.api.mcp_main import init_mcp
     from remlight.api.routers.tools import get_agent_schema, init_tools
+    from remlight.models.entities import Message, Session
     from remlight.services.database import get_db
+    from remlight.services.repository import Repository
     from remlight.settings import settings
 
     # Handle rem-simulator specially - bypass everything
-    if is_simulator_agent(schema_path):
+    if schema_path == "rem-simulator":
         click.echo()
         click.echo("[rem-simulator] Generating test events...")
-        click.echo()
-        async for chunk in stream_simulator_plain(query):
-            click.echo(chunk, nl=False)
+        click.echo(f"[Simulator] Received: {query}")
         click.echo()
         return
 
     # Validate session_id is a UUID if provided
+    session_uuid = None
     if session_id:
         try:
-            uuid_module.UUID(session_id)
+            session_uuid = UUID(session_id)
         except ValueError:
             click.echo(f"Error: Session must be a valid UUID, got: {session_id}", err=True)
             return
@@ -96,53 +90,71 @@ async def _ask_async(
     # Load schema
     if schema_path:
         if Path(schema_path).exists():
-            schema = schema_from_yaml_file(schema_path)
+            schema = AgentSchema.from_yaml_file(schema_path)
         else:
-            schema = get_agent_schema(schema_path)
-            if schema is None:
+            raw_schema = get_agent_schema(schema_path)
+            if raw_schema is None:
                 click.echo(f"Error: Agent '{schema_path}' not found", err=True)
                 return
+            schema = AgentSchema.model_validate(raw_schema)
     else:
-        schema = _default_cli_schema()
+        schema = AgentSchema.model_validate(_default_cli_schema())
 
-    # Create context and agent
-    context = AgentContext(user_id=user_id, session_id=session_id)
-    tools = await get_mcp_tools()
-    agent_runtime = await create_agent(
-        schema=schema,
-        model_name=model or settings.llm.default_model,
-        tools=tools,
-        context=context,
-    )
+    # Load message history if session provided
+    message_history = None
+    if session_uuid:
+        try:
+            await Repository(Session).upsert(Session(id=session_uuid))
+            message_repo = Repository(Message)
+            existing = await message_repo.find({"session_id": session_uuid})
+            if existing:
+                message_history = existing
+            # Save user message
+            await message_repo.upsert(Message(role="user", content=query, session_id=session_uuid))
+        except Exception:
+            pass
+
+    # Build adapter options
+    adapter_options = {}
+    if model:
+        adapter_options["model"] = model
+
+    adapter = AgentAdapter(schema, **adapter_options)
 
     click.echo()
 
     if stream:
-        async for chunk in run_streaming(
-            agent=agent_runtime.agent,
-            prompt=query,
-            context=context,
-            model=model,
-            user_id=user_id,
-            session_id=session_id,
-            agent_schema=schema,  # Pass schema for system prompt extraction
-            persist_messages=settings.postgres.enabled,
-            output_format="plain",
-        ):
-            click.echo(chunk, nl=False)
+        async with adapter.run_stream(query, message_history=message_history) as result:
+            async for event in result.stream_openai_sse():
+                print_sse(event)
+
+            # Save messages
+            if session_uuid:
+                try:
+                    msgs = result.to_messages(session_uuid)
+                    msgs_to_save = [m for m in msgs if m.role != "user"]
+                    if msgs_to_save:
+                        await Repository(Message).upsert(msgs_to_save)
+                except Exception:
+                    pass
         click.echo()
     else:
-        result = await run_sync(
-            agent=agent_runtime.agent,
-            prompt=query,
-            context=context,
-            user_id=user_id,
-            session_id=session_id,
-            agent_schema=schema,  # Pass schema for system prompt extraction
-            persist_messages=settings.postgres.enabled,
-        )
-        output = result.output if hasattr(result, "output") else result
-        click.echo(output)
+        # Non-streaming
+        async with adapter.run_stream(query, message_history=message_history) as result:
+            async for _ in result.stream_openai_sse():
+                pass
+            msgs = result.to_messages(session_uuid)
+            assistant_msgs = [m for m in msgs if m.role == "assistant"]
+            if assistant_msgs:
+                click.echo(assistant_msgs[-1].content)
+
+            if session_uuid:
+                try:
+                    msgs_to_save = [m for m in msgs if m.role != "user"]
+                    if msgs_to_save:
+                        await Repository(Message).upsert(msgs_to_save)
+                except Exception:
+                    pass
 
     try:
         await db.disconnect()
@@ -165,6 +177,7 @@ Provide clear, concise answers.""",
             "kind": "agent",
             "name": "cli-agent",
             "version": "1.0.0",
+            "structured_output": False,
             "tools": [{"name": "search"}, {"name": "action"}],
         },
     }
@@ -404,20 +417,21 @@ async def _eval_async(
     """Async implementation of eval command."""
     import json
 
-    from remlight.agentic.schema import schema_from_yaml_file
+    from remlight.agentic.agent_schema import AgentSchema
     from remlight.api.routers.tools import get_agent_schema
     from remlight.settings import settings
     from tests.eval.test_self_awareness import evaluate_agent_self_awareness
 
     # Load schema
     if Path(schema_name_or_path).exists():
-        schema = schema_from_yaml_file(schema_name_or_path)
+        schema = AgentSchema.from_yaml_file(schema_name_or_path)
     else:
-        schema = get_agent_schema(schema_name_or_path)
-        if schema is None:
+        raw_schema = get_agent_schema(schema_name_or_path)
+        if raw_schema is None:
             click.echo(f"Error: Agent '{schema_name_or_path}' not found", err=True)
             click.echo("Available agents are in the schemas/ directory", err=True)
             return
+        schema = AgentSchema.model_validate(raw_schema)
 
     # Run evaluation
     model_name = model or settings.llm.default_model

@@ -1,23 +1,10 @@
 """
-Minimal Pydantic Agent Construction
-===================================
+Minimal agent construction example.
 
-The Flow:
-    1. schema = AgentSchema.load(name)
-    2. messages = repository.find({"session_id": session_id})
-    3. adapter = AgentAdapter(schema, **input_options)
-    4. async with adapter.run_stream(prompt) as result:
-           async for event in result.stream_openai_sse():
-               print_sse(event)  # CLI
-               yield event       # API
-           messages = result.to_messages(session_id)
-    5. repository.upsert(messages)
-
-Usage:
-    python -m remlight.agentic.minimal.example
-    python -m remlight.agentic.minimal.example "What is REM?"
+See example.py for the complete flow demonstration.
+The actual adapter is now in remlight.agentic.adapter.
 """
 
-from remlight.agentic.minimal.agent_adapter import AgentAdapter, print_sse
+from remlight.agentic.adapter import AgentAdapter, StreamResult, print_sse
 
-__all__ = ["AgentAdapter", "print_sse"]
+__all__ = ["AgentAdapter", "StreamResult", "print_sse"]

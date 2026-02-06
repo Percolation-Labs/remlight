@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from remlight.agentic.schema import schema_from_yaml, schema_from_yaml_file
+from remlight.agentic.agent_schema import schema_from_yaml, schema_from_yaml_file
 from remlight.models.entities import Agent
 from remlight.services.embeddings import generate_embedding_async
 from remlight.services.repository import Repository

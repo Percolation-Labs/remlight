@@ -64,6 +64,35 @@ from pydantic import BaseModel, Field, create_model
 
 if TYPE_CHECKING:
     from pydantic_ai import UsageLimits
+    from fastapi import Request
+
+
+class AgentContext(BaseModel):
+    """
+    Minimal execution context for agent runs.
+
+    Carries WHO (user) and WHAT (session) through agent execution.
+    Used by tools that need to scope operations to user/session.
+
+    Creation:
+        # From FastAPI request
+        ctx = AgentContext.from_request(request)
+
+        # Direct (for CLI/tests)
+        ctx = AgentContext(user_id="user-123", session_id="sess-456")
+    """
+    user_id: str | None = None
+    session_id: str | None = None
+    trace_id: str | None = None
+
+    @classmethod
+    def from_request(cls, request: "Request") -> "AgentContext":
+        """Extract context from FastAPI request headers."""
+        return cls(
+            user_id=request.headers.get("x-user-id"),
+            session_id=request.headers.get("x-session-id"),
+            trace_id=request.headers.get("x-trace-id"),
+        )
 
 
 class AgentUsageLimits(BaseModel):

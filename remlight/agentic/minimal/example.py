@@ -51,7 +51,7 @@ import asyncio
 from uuid import UUID, uuid4
 
 from remlight.agentic.agent_schema import AgentSchema
-from remlight.agentic.minimal.agent_adapter import AgentAdapter, print_sse
+from remlight.agentic.adapter import AgentAdapter, print_sse
 from remlight.models.entities import Message, Session
 from remlight.services.repository import Repository
 

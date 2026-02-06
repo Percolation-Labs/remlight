@@ -711,33 +711,8 @@ async def ask_agent(
             "result": output,  # Serialized Pydantic model as dict
         })
 
-    # Save structured output as a tool message in the database
-    # This makes structured output agents look like tool calls in session history
-    if is_structured_output and child_context and child_context.session_id:
-        try:
-            from remlight.services.session import SessionMessageStore
-
-            store = SessionMessageStore(user_id=child_context.user_id or "default")
-
-            # Build tool message in the same format as regular tool calls
-            tool_message = {
-                "role": "tool",
-                "content": json.dumps(output, default=str),  # Structured output as JSON
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "tool_call_id": structured_tool_id,
-                "tool_name": agent_name,  # Agent name as tool name
-                "tool_arguments": {"input_text": input_text},
-            }
-
-            # Store as a single message
-            await store.store_session_messages(
-                session_id=child_context.session_id,
-                messages=[tool_message],
-                user_id=child_context.user_id,
-                compress=False,  # Don't compress tool results
-            )
-        except Exception:
-            pass  # Best-effort, don't fail the request
+    # NOTE: Structured output saving is now handled by the streaming layer
+    # (AgentAdapter.to_messages captures ToolReturnPart for delegate tools)
 
     response = {
         "status": "success",

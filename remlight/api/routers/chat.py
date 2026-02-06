@@ -4,22 +4,21 @@ Provides:
 - POST /chat/completions/{session_id} - OpenAI-compatible chat completions with session (preferred)
 - POST /chat/completions - OpenAI-compatible chat completions (session via X-Session-Id header)
 - Multi-agent support via X-Agent-Schema header
+
+Uses the canonical AgentAdapter for all agent execution.
 """
 
-from datetime import datetime, timezone
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from remlight.agentic import AgentContext, create_agent, schema_from_yaml
-from remlight.agentic.streaming import (
-    is_simulator_agent,
-    save_user_message,
-    stream_simulator_sse,
-    stream_sse_with_save,
-)
+from remlight.agentic.adapter import AgentAdapter, print_sse
+from remlight.agentic.agent_schema import AgentSchema
+from remlight.models.entities import Message, Session
+from remlight.services.repository import Repository
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -39,7 +38,7 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: int | None = None
 
 
-def get_default_agent_schema() -> dict[str, Any]:
+def _get_default_schema() -> dict[str, Any]:
     """Default agent schema for chat."""
     return {
         "type": "object",
@@ -54,12 +53,38 @@ Use action(type='observation', payload={confidence, sources}) to record metadata
             "kind": "agent",
             "name": "default-agent",
             "version": "1.0.0",
+            "structured_output": False,
             "tools": [
                 {"name": "search"},
                 {"name": "action"},
             ],
         },
     }
+
+
+def _is_simulator_agent(schema_uri: str | None) -> bool:
+    """Check if this is the special simulator agent."""
+    return schema_uri == "rem-simulator"
+
+
+async def _stream_simulator_sse(prompt: str, model: str):
+    """Stream simulator SSE events (bypasses LLM)."""
+    import json
+    import time
+    import uuid
+
+    request_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+    created = int(time.time())
+
+    # Simulate a response
+    content = f"[Simulator] Received: {prompt}"
+
+    # First chunk with role
+    yield f"data: {json.dumps({'id': request_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': content}, 'finish_reason': None}]})}\n\n"
+
+    # Final chunk
+    yield f"data: {json.dumps({'id': request_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
+    yield "data: [DONE]\n\n"
 
 
 @router.post("/completions/{session_id}")
@@ -88,172 +113,122 @@ async def chat_completions(
     3. Saves assistant response after streaming completes
     4. Persists tool calls for context reconstruction
     """
-    from remlight.api.mcp_main import get_mcp_tools
-
-    # Get context from headers with user profile hint
-    context = await AgentContext.from_headers_with_profile(dict(req.headers))
-
-    # Get agent schema from header or use default
-    # schema_uri can be an agent name (e.g., "orchestrator-agent") or a path
+    # Extract context from headers
+    user_id = req.headers.get("x-user-id", "anonymous")
+    effective_session_id = session_id or req.headers.get("x-session-id")
     schema_uri = req.headers.get("x-agent-schema")
 
-    # Handle rem-simulator agent specially - bypass LLM entirely
-    if is_simulator_agent(schema_uri):
-        # Build prompt from most recent user message
+    # Handle simulator agent specially - bypass LLM entirely
+    if _is_simulator_agent(schema_uri):
         user_messages = [m for m in request.messages if m.role == "user"]
         prompt = user_messages[-1].content if user_messages else "test all"
 
         if request.stream:
             return StreamingResponse(
-                stream_simulator_sse(prompt=prompt, model="rem-simulator"),
+                _stream_simulator_sse(prompt=prompt, model="rem-simulator"),
                 media_type="text/event-stream",
             )
         else:
-            # Non-streaming simulator response
             return {
                 "id": "chatcmpl-simulator",
                 "object": "chat.completion",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": "Simulator response. Use stream=true for full demonstration.",
-                        },
-                        "finish_reason": "stop",
-                    }
-                ],
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Simulator response."}, "finish_reason": "stop"}],
             }
 
+    # Load agent schema
     if schema_uri:
-        # First try to look up by name from the registry
-        from remlight.api.routers.tools import get_agent_schema
-        schema = get_agent_schema(schema_uri)
-        if schema is None:
-            # Fall back to trying to parse as YAML content (legacy support)
-            try:
-                schema = schema_from_yaml(schema_uri)
-            except Exception:
-                schema = get_default_agent_schema()
+        try:
+            schema = AgentSchema.load(schema_uri)
+        except Exception:
+            schema = AgentSchema.model_validate(_get_default_schema())
     else:
-        schema = get_default_agent_schema()
-
-    # Get MCP tools
-    tools = await get_mcp_tools()
-
-    # Create agent with context
-    agent_runtime = await create_agent(
-        schema=schema,
-        model_name=request.model,
-        tools=tools,
-        context=context,
-    )
+        schema = AgentSchema.model_validate(_get_default_schema())
 
     # Build prompt from most recent user message
     user_messages = [m for m in request.messages if m.role == "user"]
-    if user_messages:
-        prompt = user_messages[-1].content
-    else:
-        prompt = request.messages[-1].content if request.messages else ""
+    prompt = user_messages[-1].content if user_messages else (request.messages[-1].content if request.messages else "")
 
-    # Load session history if session_id is provided
-    # URL parameter takes precedence over header
+    # Load message history and save user message
     message_history = None
-    effective_session_id = session_id or context.session_id
-    user_id = context.user_id
+    session_uuid = None
 
     if effective_session_id:
         try:
-            from remlight.services.session import (
-                SessionMessageStore,
-                session_to_pydantic_messages,
-            )
+            session_uuid = UUID(effective_session_id)
 
-            store = SessionMessageStore(user_id=user_id or "anonymous")
-            raw_history = await store.load_session_messages(
-                session_id=effective_session_id,
-                user_id=user_id,
-                compress_on_load=True,
-            )
+            # Ensure session exists
+            await Repository(Session).upsert(Session(id=session_uuid))
 
-            if raw_history:
-                system_prompt = None
-                if hasattr(schema, "description"):
-                    system_prompt = schema.description
-                elif isinstance(schema, dict):
-                    system_prompt = schema.get("description")
+            # Load history
+            message_repo = Repository(Message)
+            existing_messages = await message_repo.find({"session_id": session_uuid})
+            if existing_messages:
+                message_history = existing_messages
 
-                message_history = session_to_pydantic_messages(
-                    raw_history,
-                    system_prompt=system_prompt,
-                )
+            # Save user message before streaming
+            user_msg = Message(role="user", content=prompt, session_id=session_uuid)
+            await message_repo.upsert(user_msg)
         except Exception:
             pass
 
-        # Save user message BEFORE streaming
-        await save_user_message(
-            session_id=effective_session_id,
-            user_id=user_id,
-            content=prompt,
-        )
+    # Build adapter options
+    adapter_options = {}
+    if request.model:
+        adapter_options["model"] = request.model
+    if request.temperature is not None:
+        adapter_options["temperature"] = request.temperature
 
-    agent_schema_name = None
-    if hasattr(schema, "json_schema_extra") and hasattr(schema.json_schema_extra, "name"):
-        agent_schema_name = schema.json_schema_extra.name
-    elif isinstance(schema, dict) and "json_schema_extra" in schema:
-        agent_schema_name = schema["json_schema_extra"].get("name")
+    adapter = AgentAdapter(schema, **adapter_options)
 
     if request.stream:
+        async def stream_with_save():
+            """Stream SSE and save messages after completion."""
+            messages_to_save = []
+
+            async with adapter.run_stream(prompt, message_history=message_history) as result:
+                async for event in result.stream_openai_sse():
+                    yield event
+
+                # Get messages (excludes user message since we already saved it)
+                all_msgs = result.to_messages(session_uuid)
+                # Filter out user message (already saved)
+                messages_to_save = [m for m in all_msgs if m.role != "user"]
+
+            # Save after streaming completes
+            if session_uuid and messages_to_save:
+                try:
+                    await Repository(Message).upsert(messages_to_save)
+                except Exception:
+                    pass
+
         return StreamingResponse(
-            stream_sse_with_save(
-                agent=agent_runtime.agent,
-                prompt=prompt,
-                model=request.model,
-                agent_schema=agent_schema_name,
-                session_id=effective_session_id,
-                user_id=user_id,
-                context=context,
-                message_history=message_history,
-            ),
+            stream_with_save(),
             media_type="text/event-stream",
         )
     else:
-        # Non-streaming response
-        run_kwargs = {}
-        if message_history:
-            run_kwargs["message_history"] = message_history
+        # Non-streaming: run and return
+        async with adapter.run_stream(prompt, message_history=message_history) as result:
+            # Consume stream to get final result
+            async for _ in result.stream_openai_sse():
+                pass
 
-        result = await agent_runtime.agent.run(prompt, **run_kwargs)
+            messages = result.to_messages(session_uuid)
 
-        # Save assistant response
-        if effective_session_id:
-            from remlight.services.session import SessionMessageStore
-            from datetime import datetime, timezone
+            # Save messages (excluding user which was already saved)
+            if session_uuid:
+                try:
+                    msgs_to_save = [m for m in messages if m.role != "user"]
+                    if msgs_to_save:
+                        await Repository(Message).upsert(msgs_to_save)
+                except Exception:
+                    pass
 
-            output_str = str(result.output) if hasattr(result, "output") else str(result)
+            # Get assistant content
+            assistant_msgs = [m for m in messages if m.role == "assistant"]
+            content = assistant_msgs[-1].content if assistant_msgs else ""
 
-            store = SessionMessageStore(user_id=user_id or "anonymous")
-            await store.store_session_messages(
-                session_id=effective_session_id,
-                messages=[{
-                    "role": "assistant",
-                    "content": output_str,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }],
-                user_id=user_id,
-            )
-
-        return {
-            "id": "chatcmpl-remlight",
-            "object": "chat.completion",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": str(result.output) if hasattr(result, "output") else str(result),
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-        }
+            return {
+                "id": "chatcmpl-remlight",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+            }

@@ -1,13 +1,27 @@
 """
-Agent Adapter - Wraps AgentSchema to yield OpenAI-compatible SSE events.
+Agent Adapter - The canonical way to run agents with OpenAI-compatible SSE streaming.
+
+This module replaces the legacy provider.py, runner.py, streaming/, and context.py
+with a minimal, clean implementation.
 
 Usage:
+    from remlight.agentic import AgentAdapter, AgentSchema
+
+    schema = AgentSchema.load("query-agent")
     adapter = AgentAdapter(schema)
+
     async with adapter.run_stream(prompt, message_history=messages) as result:
         async for event in result.stream_openai_sse():
             print_sse(event)  # CLI helper
-            yield event       # API use
+            yield event       # API streaming
         messages = result.to_messages(session_id)
+
+Features:
+    - OpenAI-compatible SSE streaming (chat.completion.chunk format)
+    - Automatic tool call formatting
+    - Multi-agent delegation via ask_agent tool
+    - Structured output capture from delegate agents
+    - Message conversion for database persistence
 """
 
 import json
@@ -34,8 +48,18 @@ def print_sse(event: str) -> None:
             pass
 
 
+# Tools that are loaded as delegates (not from MCP)
+DELEGATE_TOOL_NAMES = {"ask_agent"}
+
+
 class StreamResult:
-    """Result handle from AgentAdapter.run_stream()."""
+    """Result handle from AgentAdapter.run_stream().
+
+    Provides:
+    - stream_openai_sse(): Async generator of SSE events
+    - to_messages(): Convert to Message entities for persistence
+    - all_messages(): Raw pydantic-ai messages
+    """
 
     def __init__(self, agent_run, ctx):
         self._agent_run = agent_run
@@ -176,16 +200,8 @@ class StreamResult:
         return f"data: {json.dumps(chunk)}\n\n"
 
 
-DELEGATE_TOOL_NAMES = {"ask_agent"}  # Tools we load as delegates, not from MCP
-
-
-def get_delegate_tools(schema) -> list:
-    """
-    Get delegate tools (like ask_agent) declared in schema.
-
-    If schema declares ask_agent in tools, we load the production version
-    which has full streaming and structured output support.
-    """
+def _get_delegate_tools(schema) -> list:
+    """Get delegate tools (like ask_agent) declared in schema."""
     tools = []
     tool_names = {t.name for t in schema.tools} if schema.tools else set()
 
@@ -196,18 +212,16 @@ def get_delegate_tools(schema) -> list:
     return tools
 
 
-def filter_mcp_tools(schema):
+def _filter_mcp_tools(schema):
     """Return schema with delegate tools removed (to avoid MCP conflict)."""
     if not schema.tools:
         return schema
 
-    # Filter out delegate tools from MCP loading
     filtered = [t for t in schema.tools if t.name not in DELEGATE_TOOL_NAMES]
 
     if len(filtered) == len(schema.tools):
-        return schema  # No changes needed
+        return schema
 
-    # Create new schema with filtered tools
     return schema.model_copy(update={
         "json_schema_extra": schema.json_schema_extra.model_copy(update={"tools": filtered})
     })
@@ -215,19 +229,28 @@ def filter_mcp_tools(schema):
 
 class AgentAdapter:
     """
-    Wraps AgentSchema to create agent and yield OpenAI-compatible SSE events.
+    The canonical adapter for running agents with streaming.
+
+    Wraps AgentSchema to create a pydantic-ai Agent and yield OpenAI-compatible
+    SSE events. Replaces the legacy create_agent/streaming architecture.
 
     Usage:
+        schema = AgentSchema.load("query-agent")
         adapter = AgentAdapter(schema)
+
         async with adapter.run_stream(prompt) as result:
             async for event in result.stream_openai_sse():
-                print_sse(event)
+                yield event
             messages = result.to_messages(session_id)
-
-    All agents get a `delegate(agent_name, prompt)` tool for multi-agent orchestration.
     """
 
     def __init__(self, schema, **input_options):
+        """Initialize adapter with schema and optional overrides.
+
+        Args:
+            schema: AgentSchema instance
+            **input_options: Override model, temperature, etc.
+        """
         self._schema = schema
         self._input_options = input_options
         self._agent = None
@@ -242,13 +265,13 @@ class AgentAdapter:
         options = self._schema.get_options(**self._input_options)
 
         # Filter out delegate tools from MCP to avoid name conflict
-        mcp_schema = filter_mcp_tools(self._schema)
+        mcp_schema = _filter_mcp_tools(self._schema)
         toolsets = await resolve_tools_from_schema(mcp_schema)
 
         # Get delegate tools (ask_agent etc) as standalone tools
-        delegate_tools = get_delegate_tools(self._schema)
+        delegate_tools = _get_delegate_tools(self._schema)
 
-        # Build agent with tools
+        # Build agent
         agent_kwargs = {
             "system_prompt": self._schema.get_system_prompt(),
             "output_type": self._schema.to_output_schema(),
@@ -268,10 +291,16 @@ class AgentAdapter:
         *,
         message_history: list | None = None,
     ):
-        """Run agent with streaming."""
+        """Run agent with streaming.
+
+        Args:
+            prompt: User message
+            message_history: Optional previous messages for context
+
+        Yields:
+            StreamResult with stream_openai_sse() and to_messages() methods
+        """
         await self._ensure_agent()
 
-        # Context manager ensures agent_run is properly closed when caller exits.
-        # agent.iter() returns an async context manager that manages the run lifecycle.
         async with self._agent.iter(prompt, message_history=message_history) as agent_run:
             yield StreamResult(agent_run, agent_run.ctx)
