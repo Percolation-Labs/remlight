@@ -91,7 +91,9 @@ async def main(prompt: str, session_id: UUID, save_examples: bool = False, **inp
     
     # a repository should abstract in schema agnostic way and manage db connections
     message_repo = Repository(Message)
-    # use generic filtering
+    # use generic filtering 
+    # TODO: make sure to use context aware loading e.g. max messages or max context size
+    # IF tiktoken or something use to estimate tokens/possibly saved, DB function can do this
     messages = await message_repo.find({"session_id": session_id})
 
     # 3. Create adapter - should use caching internally for API use cases
