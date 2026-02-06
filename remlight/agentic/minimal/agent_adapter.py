@@ -181,6 +181,7 @@ class AgentAdapter:
         options = self._schema.get_options(**self._input_options)
         
         #PydanticAI has tooling to build mcp tools from local or remote mcp servers
+        #see https://ai.pydantic.dev/web/#builtin-tool-support
         toolsets = await resolve_tools_from_schema(self._schema)
 
         self._agent = Agent(
