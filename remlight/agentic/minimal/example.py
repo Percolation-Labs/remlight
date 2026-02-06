@@ -11,8 +11,8 @@ Starting the API:
 
 
 API Usage:
-    #open ai request/response models used as a standard
-    
+    # OpenAI request/response models used as a standard
+
     POST http://localhost:8000/api/v1/chat/completions/{session_id}
 
     Headers:
@@ -42,7 +42,22 @@ CLI Usage:
     python -m remlight.agentic.minimal.example
     python -m remlight.agentic.minimal.example "What is REM?"
 
+Debug: View Actual LLM Payload:
+    To see the exact JSON payload sent to OpenAI (system prompt, tools, messages):
+
+    import logging
+    logging.basicConfig(level=logging.DEBUG)
+    logging.getLogger('openai._base_client').setLevel(logging.DEBUG)
+
+    This logs the full request including:
+    - model, temperature, messages
+    - tools array (only tools declared in YAML schema are sent)
+    - tool_choice settings
+
+    See example-payload.yaml for a sample of what gets sent.
+
 See also:
+    - example-payload.yaml: Actual payload sent to OpenAI API
     - example.sse.txt: Sample SSE events from stream_openai_sse()
     - example.yaml: Converted messages (what gets saved to DB)
 """

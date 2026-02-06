@@ -1,0 +1,129 @@
+# =============================================================================
+# ACTUAL PAYLOAD SENT TO OPENAI API
+# =============================================================================
+#
+# How to capture this:
+#   import logging
+#   logging.basicConfig(level=logging.DEBUG)
+#   logging.getLogger('openai._base_client').setLevel(logging.DEBUG)
+#
+# The openai._base_client logger outputs the full json_data in "Request options"
+#
+# Key insight: Only tools declared in the YAML schema are sent to the LLM.
+# This proves the filtering works correctly.
+# =============================================================================
+
+# Request sent to: POST https://api.openai.com/v1/chat/completions
+
+model: gpt-4.1
+temperature: 0.5
+stream: true
+stream_options:
+  include_usage: true
+tool_choice: auto
+
+messages:
+  - role: system
+    content: |
+      # Orchestrator Agent
+
+      A coordination agent that delegates tasks to specialized sub-agents.
+
+      ## Important Constraints
+
+      > **You do NOT have direct access to databases, search tools, or other capabilities.**
+      > Your ONLY capability is to delegate tasks using the `ask_agent` tool.
+
+      ## Available Agents
+
+      | Agent | Purpose |
+      |-------|---------|
+      | `query-agent` | Search knowledge base, lookup entities, answer data questions |
+      | `worker-agent` | General task execution and observations |
+      | `action-agent` | Record observations and metadata |
+
+      ## Workflow
+
+      1. **Analyze** - Determine which agent is best suited for the task
+      2. **Delegate** - Use `ask_agent` to hand off the work
+      3. **Summarize** - Wait for results and present them to the user
+      4. **Record** - Always call `action` to log conversation metadata
+
+  - role: user
+    content: "What tools do you have?"
+
+# =============================================================================
+# TOOLS SENT TO LLM (only what's in orchestrator-agent.yaml)
+# =============================================================================
+#
+# NOT SENT: search, parse_file, save_agent, analyze_pages, read_resource
+# These exist in MCP but are filtered out because they're not in the schema.
+# =============================================================================
+
+tools:
+  # Tool 1: ask_agent (delegate tool - from schema tools list)
+  - type: function
+    function:
+      name: ask_agent
+      description: "Invoke another agent by name and return its response."
+      parameters:
+        type: object
+        required: [agent_name, input_text]
+        properties:
+          agent_name:
+            type: string
+            description: "Name of the agent to invoke (must be registered)"
+          input_text:
+            type: string
+            description: "The user message/query to send to the agent"
+          input_data:
+            description: "Optional structured input data for the agent"
+            anyOf: [{type: object}, {type: "null"}]
+          user_id:
+            description: "Optional user override"
+            anyOf: [{type: string}, {type: "null"}]
+          timeout_seconds:
+            type: integer
+            default: 300
+
+  # Tool 2: system_status (resource tool - from schema resources list)
+  - type: function
+    function:
+      name: system_status
+      description: "Get REMLight system status and configuration"
+      parameters:
+        type: object
+        properties: {}  # No parameters - static resource
+
+  # Tool 3: get_user_profile (resource tool - from schema resources list)
+  # Parameters extracted from URI template: user://profile/{user_id}
+  - type: function
+    function:
+      name: get_user_profile
+      description: "Fetch user profile by user ID"
+      parameters:
+        type: object
+        required: [user_id]
+        properties:
+          user_id:
+            type: string
+
+  # Tool 4: action (MCP tool - from schema tools list)
+  - type: function
+    function:
+      name: action
+      description: |
+        Emit a typed action event for SSE streaming and UI updates.
+        Action Types:
+          - "observation": Record metadata (confidence, sources, session_name)
+          - "elicit": Request additional information from user
+          - "set_schema": Replace schema with new YAML
+          - "schema_focus": Highlight a section in the UI
+      parameters:
+        type: object
+        required: [type]
+        properties:
+          type:
+            type: string
+          payload:
+            anyOf: [{type: object}, {type: "null"}]

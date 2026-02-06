@@ -1197,6 +1197,44 @@ Include:
                 pass
 
 
+async def read_resource(uri: str) -> dict[str, Any]:
+    """
+    Read content from an MCP resource by URI.
+
+    Exposes MCP resources as a callable tool for agents.
+    Supports URI patterns like:
+    - user://profile/{user_id}
+    - project://{project_key}
+    - rem://status
+
+    Args:
+        uri: Resource URI (e.g., "user://profile/sarah-chen", "rem://status")
+
+    Returns:
+        Dict with status, uri, content (or error)
+    """
+    from remlight.api.mcp_main import get_mcp_server
+
+    try:
+        mcp = get_mcp_server()
+
+        # Use MCP's resource reading capability
+        # FastMCP stores resources and can read them via the client interface
+        result = await mcp.read_resource(uri)
+
+        return {
+            "status": "success",
+            "uri": uri,
+            "content": result,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "uri": uri,
+            "error": str(e),
+        }
+
+
 @router.post("/search")
 async def search_endpoint(request: SearchRequest) -> dict[str, Any]:
     """REST endpoint for search tool."""

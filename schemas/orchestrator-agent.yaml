@@ -71,3 +71,10 @@ json_schema_extra:
       description: Delegate a task to another agent
     - name: action
       description: Record metadata about the response (confidence, session_name, sources)
+  resources:
+    - name: system_status
+      uri: "rem://status"
+      description: Get REMLight system status and configuration
+    - name: get_user_profile
+      uri: "user://profile/{user_id}"
+      description: Fetch user profile by user ID

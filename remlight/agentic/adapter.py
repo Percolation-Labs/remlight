@@ -256,7 +256,7 @@ class AgentAdapter:
         self._agent = None
 
     async def _ensure_agent(self):
-        """Lazily create the agent with toolsets."""
+        """Lazily create the agent with toolsets and resource tools."""
         if self._agent is not None:
             return
 
@@ -266,10 +266,19 @@ class AgentAdapter:
 
         # Filter out delegate tools from MCP to avoid name conflict
         mcp_schema = _filter_mcp_tools(self._schema)
-        toolsets = await resolve_tools_from_schema(mcp_schema)
+
+        # Resolve both toolsets (MCP tools) and resource tools
+        toolsets, resource_tools = await resolve_tools_from_schema(mcp_schema)
 
         # Get delegate tools (ask_agent etc) as standalone tools
         delegate_tools = _get_delegate_tools(self._schema)
+
+        # Combine all standalone tools (delegates + resources)
+        all_tools = []
+        if delegate_tools:
+            all_tools.extend(delegate_tools)
+        if resource_tools:
+            all_tools.extend(resource_tools)
 
         # Build agent
         agent_kwargs = {
@@ -279,10 +288,68 @@ class AgentAdapter:
         }
         if toolsets:
             agent_kwargs["toolsets"] = toolsets
-        if delegate_tools:
-            agent_kwargs["tools"] = delegate_tools
+        if all_tools:
+            agent_kwargs["tools"] = all_tools
 
         self._agent = Agent(**agent_kwargs)
+
+        # Debug: dump payload to example-payload.yaml
+        await self._dump_agent_payload(agent_kwargs, toolsets, all_tools)
+
+    async def _dump_agent_payload(self, agent_kwargs: dict, toolsets: list | None, tools: list | None):
+        """Dump agent configuration to example-payload.yaml for debugging."""
+        import os
+        import yaml
+        from pathlib import Path
+
+        if not os.getenv("DEBUG_AGENT_PAYLOAD"):
+            return
+
+        payload = {
+            "agent_name": self._schema.name,
+            "model": agent_kwargs.get("model"),
+            "model_settings": agent_kwargs.get("model_settings"),
+            "system_prompt": agent_kwargs.get("system_prompt"),
+            "output_type": str(agent_kwargs.get("output_type")),
+            "tools": [],
+            "toolsets": [],
+        }
+
+        # Extract tool info from standalone tools
+        if tools:
+            for tool in tools:
+                payload["tools"].append({
+                    "name": getattr(tool, "__name__", str(tool)),
+                    "doc": getattr(tool, "__doc__", None),
+                    "annotations": {k: str(v) for k, v in getattr(tool, "__annotations__", {}).items()},
+                })
+
+        # Extract tool info from toolsets (MCP tools)
+        if toolsets:
+            for ts in toolsets:
+                try:
+                    # Get tool definitions - try different methods
+                    if hasattr(ts, "list_tool_defs"):
+                        tool_defs = await ts.list_tool_defs(None)  # ctx=None
+                    elif hasattr(ts, "wrapped") and hasattr(ts.wrapped, "list_tool_defs"):
+                        tool_defs = await ts.wrapped.list_tool_defs(None)
+                    else:
+                        payload["toolsets"].append({"type": type(ts).__name__, "info": "could not list tools"})
+                        continue
+
+                    for td in tool_defs:
+                        payload["toolsets"].append({
+                            "name": td.name,
+                            "description": td.description,
+                            "parameters": td.parameters_json_schema if hasattr(td, "parameters_json_schema") else None,
+                        })
+                except Exception as e:
+                    payload["toolsets"].append({"error": str(e)})
+
+        # Write to file
+        output_path = Path(__file__).parent / "minimal" / "example-payload.yaml"
+        with open(output_path, "w") as f:
+            yaml.dump(payload, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
     @asynccontextmanager
     async def run_stream(

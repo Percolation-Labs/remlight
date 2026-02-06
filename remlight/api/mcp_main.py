@@ -27,6 +27,7 @@ from remlight.api.routers.tools import (
     parse_file,
     save_agent,
     analyze_pages,
+    read_resource,
     init_tools,
     get_user_profile,
     format_user_profile,
@@ -82,6 +83,7 @@ Tables: ontologies, resources, users, messages, sessions
     mcp.tool(name="parse_file")(parse_file)
     mcp.tool(name="save_agent")(save_agent)
     mcp.tool(name="analyze_pages")(analyze_pages)
+    mcp.tool(name="read_resource")(read_resource)
 
     # Register MCP resources
     _register_resources(mcp)

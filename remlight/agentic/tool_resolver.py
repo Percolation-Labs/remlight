@@ -109,6 +109,163 @@ def create_filtered_mcp_toolset(
 
 
 # =============================================================================
+# RESOURCES AS TOOLS
+# =============================================================================
+
+
+def create_resource_tools(resources: list) -> list[Callable]:
+    """
+    Create tool functions from MCP resource references.
+
+    Converts declared resources into callable tools so agents can access them.
+    Supports both static URIs and parameterized URI patterns.
+
+    Args:
+        resources: List of MCPResourceReference (or dicts with uri/name/description)
+
+    Returns:
+        List of async callable tool functions
+
+    Example schema:
+        resources:
+          - name: get_user_profile
+            uri: "user://profile/{user_id}"
+            description: "Fetch user profile by ID"
+          - name: system_status
+            uri: "rem://status"
+            description: "Get system status"
+    """
+    import re
+    from typing import get_type_hints
+
+    tools = []
+
+    for resource in resources:
+        # Support both MCPResourceReference and dict
+        if hasattr(resource, "uri"):
+            uri = resource.uri or resource.uri_pattern
+            name = resource.name
+            description = resource.description
+        elif isinstance(resource, dict):
+            uri = resource.get("uri") or resource.get("uri_pattern")
+            name = resource.get("name")
+            description = resource.get("description")
+        else:
+            continue
+
+        if not uri:
+            continue
+
+        # Generate tool name from resource name or URI
+        tool_name = name or uri.replace("://", "_").replace("/", "_").replace("{", "").replace("}", "")
+
+        # Extract parameters from URI pattern (e.g., {user_id} -> user_id)
+        param_pattern = re.compile(r"\{(\w+)\}")
+        params = param_pattern.findall(uri)
+
+        if params:
+            # Parameterized resource - create tool with typed parameters
+            tool = _create_parameterized_resource_tool(
+                tool_name=tool_name,
+                uri_template=uri,
+                params=params,
+                description=description or f"Read resource: {uri}",
+            )
+        else:
+            # Static resource - create simple tool
+            tool = _create_static_resource_tool(
+                tool_name=tool_name,
+                uri=uri,
+                description=description or f"Read resource: {uri}",
+            )
+
+        tools.append(tool)
+
+    return tools
+
+
+def _create_static_resource_tool(tool_name: str, uri: str, description: str) -> Callable:
+    """Create a tool that reads a static resource URI."""
+
+    async def resource_tool() -> str:
+        """Read resource content."""
+        import asyncio
+        from remlight.api.mcp_main import get_mcp_server
+
+        mcp = get_mcp_server()
+        resource = await mcp.get_resource(uri)
+
+        if resource is None:
+            return f"Resource not found: {uri}"
+
+        # Call the resource function
+        fn = resource.fn
+        if asyncio.iscoroutinefunction(fn):
+            result = await fn()
+        else:
+            result = fn()
+
+        return str(result) if result else ""
+
+    resource_tool.__name__ = tool_name
+    resource_tool.__doc__ = description
+    return resource_tool
+
+
+def _create_parameterized_resource_tool(
+    tool_name: str,
+    uri_template: str,
+    params: list[str],
+    description: str,
+) -> Callable:
+    """Create a tool that reads a parameterized resource URI (template).
+
+    Creates a function with proper signature so pydantic-ai can discover parameters.
+    """
+    import inspect
+
+    # Create the actual implementation
+    async def _impl(**kwargs) -> str:
+        import asyncio
+        from remlight.api.mcp_main import get_mcp_server
+
+        mcp = get_mcp_server()
+        template = await mcp.get_resource_template(uri_template)
+
+        if template is None:
+            return f"Resource template not found: {uri_template}"
+
+        fn = template.fn
+        if asyncio.iscoroutinefunction(fn):
+            result = await fn(**kwargs)
+        else:
+            result = fn(**kwargs)
+
+        return str(result) if result else ""
+
+    # Build proper function signature for pydantic-ai to discover
+    sig_params = [
+        inspect.Parameter(p, inspect.Parameter.KEYWORD_ONLY, annotation=str)
+        for p in params
+    ]
+    sig = inspect.Signature(sig_params, return_annotation=str)
+
+    # Create wrapper that forwards to impl
+    async def resource_tool(*args, **kwargs) -> str:
+        # Bind args to param names if passed positionally
+        bound = sig.bind(*args, **kwargs)
+        return await _impl(**bound.arguments)
+
+    resource_tool.__name__ = tool_name
+    resource_tool.__doc__ = description
+    resource_tool.__signature__ = sig
+    resource_tool.__annotations__ = {p: str for p in params}
+    resource_tool.__annotations__["return"] = str
+
+    return resource_tool
+
+
+# =============================================================================
 # REST TOOL WRAPPER (Legacy - no schema introspection)
 # =============================================================================
 
@@ -451,36 +608,50 @@ async def resolve_tools_for_agent(
 # =============================================================================
 
 
-async def resolve_tools_from_schema(schema, mcp_endpoint: str | None = None) -> list | None:
+async def resolve_tools_from_schema(
+    schema,
+    mcp_endpoint: str | None = None,
+) -> tuple[list | None, list | None]:
     """
-    Resolve toolsets from an AgentSchema.
+    Resolve toolsets and resource tools from an AgentSchema.
 
-    Simple helper that returns toolsets or None.
+    Returns both MCP toolsets (for tools) and callable functions (for resources).
 
     Args:
-        schema: AgentSchema with tools defined
+        schema: AgentSchema with tools and/or resources defined
         mcp_endpoint: Optional MCP endpoint URL. If not provided, tries local server
-                      then falls back to localhost:8000 (for demonstration - pure local is supported)
+                      then falls back to localhost:8000
 
     Returns:
-        List of toolsets or None if no tools
+        Tuple of (toolsets, resource_tools):
+        - toolsets: List of FastMCPToolset for Agent(toolsets=...)
+        - resource_tools: List of callables for Agent(tools=...)
     """
-    if not schema.tools:
-        return None
-
     from remlight.api.mcp_main import get_mcp_server
 
-    local_server = get_mcp_server()
+    toolsets = None
+    resource_tools = None
 
-    # If no local server initialized, fall back to HTTP endpoint
-    # This is for demonstration purposes - pure local MCP server is also supported
-    if local_server is None and mcp_endpoint is None:
-        mcp_endpoint = "http://localhost:8000/api/v1/mcp"
-        logger.debug(f"No local MCP server, using endpoint: {mcp_endpoint}")
+    # Resolve MCP tools as toolsets
+    if schema.tools:
+        local_server = get_mcp_server()
 
-    toolsets, _ = await resolve_tools_as_toolsets(
-        schema.tools,
-        local_mcp_server=local_server or mcp_endpoint,
-    )
+        if local_server is None and mcp_endpoint is None:
+            mcp_endpoint = "http://localhost:8000/api/v1/mcp"
+            logger.debug(f"No local MCP server, using endpoint: {mcp_endpoint}")
 
-    return toolsets if toolsets else None
+        resolved_toolsets, _ = await resolve_tools_as_toolsets(
+            schema.tools,
+            local_mcp_server=local_server or mcp_endpoint,
+        )
+        if resolved_toolsets:
+            toolsets = resolved_toolsets
+
+    # Convert resources to callable tools
+    resources = getattr(schema.json_schema_extra, "resources", None) or []
+    if resources:
+        resource_tools = create_resource_tools(resources)
+        if resource_tools:
+            logger.debug(f"Created {len(resource_tools)} resource tools")
+
+    return toolsets, resource_tools
