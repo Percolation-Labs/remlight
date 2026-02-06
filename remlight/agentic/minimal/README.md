@@ -5,13 +5,12 @@ The simplest path to construct a Pydantic AI agent from `AgentSchema`.
 ## The Flow
 
 ```python
-repository = Repository(Message)
-
 # 1. Load schema
-schema = AgentSchema.load("query-agent")
+schema = AgentSchema.load("orchestrator-agent")
 
-# 2. Load messages
-messages = await repository.find({"session_id": session_id}) if session_id else []
+# 2. Ensure session and load messages
+await Repository(Session).upsert(Session(id=session_id))
+messages = await Repository(Message).find({"session_id": session_id})
 
 # 3. Create adapter
 adapter = AgentAdapter(schema, **input_options)
@@ -24,17 +23,28 @@ async with adapter.run_stream(prompt, message_history=messages) as result:
     messages = result.to_messages(session_id)
 
 # 5. Save
-await repository.upsert(messages)
+await message_repo.upsert(messages)
 ```
 
 ## Run
 
 ```bash
+# Start API server (required for MCP tools)
+uvicorn remlight.api.main:app --port 8000 &
+
+# Run example
 python -m remlight.agentic.minimal.example
 python -m remlight.agentic.minimal.example "What is REM?"
+
+# Regenerate example output files
+python -m remlight.agentic.minimal.example --save
 ```
 
 ## Files
 
-- `example.py` - Runnable demo
-- `agent_adapter.py` - AgentAdapter, StreamResult, print_sse
+| File | Purpose |
+|------|---------|
+| `example.py` | Runnable demo with full flow |
+| `agent_adapter.py` | AgentAdapter, StreamResult, print_sse |
+| `example.sse.txt` | Sample SSE events (includes tool calls) |
+| `example.yaml` | Converted messages saved to DB |
