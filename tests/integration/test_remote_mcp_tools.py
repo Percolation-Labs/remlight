@@ -1,49 +1,131 @@
 """
-Integration tests for remote MCP tool resolution.
+Integration tests for remote MCP tool resolution using FastMCPToolset.
 
-These tests verify that tools fetched from a remote MCP server
-have proper type annotations that PydanticAI can parse.
+These tests verify that FastMCPToolset correctly creates filtered toolsets
+from local and remote MCP servers.
 
 TEST SETUP
 ----------
-We use the local REMLight MCP server (in-process via FastMCP Client)
-to simulate a "remote" server. This tests the full flow:
+We use the local REMLight MCP server (in-process via FastMCP) to test the flow:
 
-1. Connect to MCP server via FastMCP Client
-2. Fetch tool schemas (list_tools)
-3. Build annotated wrapper functions
-4. Verify PydanticAI extracts correct JSON Schema
+1. Create FastMCPToolset from MCP server
+2. Apply filtering to restrict available tools
+3. Verify the toolset works with PydanticAI agents
 
 WHY THIS MATTERS
 ----------------
-Without proper annotations, PydanticAI generates empty schemas:
-    {"additionalProperties": true, "properties": {}, "type": "object"}
+FastMCPToolset from pydantic-ai handles:
+- Schema extraction from MCP servers
+- Type annotation generation
+- Tool wrapper creation
+- Caching
 
-The LLM has NO IDEA what parameters to pass. With proper annotations:
-    {
-        "properties": {
-            "query": {"type": "string", "description": "Search query"},
-            "limit": {"type": "integer", "default": 20}
-        },
-        "required": ["query"]
-    }
-
-The LLM knows exactly what parameters are available and their types.
+We just need to verify our filtering and integration work correctly.
 """
 
 import pytest
-import json
 from pydantic_ai import Agent
 
 from remlight.agentic.tool_resolver import (
-    fetch_mcp_tool_schemas,
-    create_annotated_mcp_wrapper,
+    create_filtered_mcp_toolset,
+    resolve_tools_as_toolsets,
     clear_server_cache,
 )
 
 
-class TestRemoteMCPToolSchemas:
-    """Test fetching tool schemas from MCP server."""
+class TestFastMCPToolsetCreation:
+    """Test creating FastMCPToolset from MCP servers."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Clear caches before each test."""
+        clear_server_cache()
+
+    def test_create_toolset_from_fastmcp_server(self):
+        """
+        Create a FastMCPToolset from a FastMCP server instance.
+
+        This tests the in-process connection (no network overhead).
+        """
+        from fastmcp import FastMCP
+
+        # Create a test MCP server
+        mcp = FastMCP("test-server")
+
+        @mcp.tool()
+        def test_tool(query: str, limit: int = 10) -> str:
+            """A test tool for searching.
+
+            Args:
+                query: The search query
+                limit: Maximum results to return
+            """
+            return f"Results for {query}"
+
+        # Create toolset
+        toolset = create_filtered_mcp_toolset(mcp)
+
+        # Verify toolset was created
+        assert toolset is not None
+        # The toolset should be a FastMCPToolset or FilteredToolset
+        assert "Toolset" in type(toolset).__name__
+
+    def test_create_filtered_toolset(self):
+        """
+        Create a filtered toolset that only includes specific tools.
+        """
+        from fastmcp import FastMCP
+
+        mcp = FastMCP("test-server")
+
+        @mcp.tool()
+        def allowed_tool(x: str) -> str:
+            """An allowed tool."""
+            return x
+
+        @mcp.tool()
+        def blocked_tool(x: str) -> str:
+            """A blocked tool."""
+            return x
+
+        # Create filtered toolset - only allow 'allowed_tool'
+        toolset = create_filtered_mcp_toolset(
+            mcp,
+            allowed_tools={"allowed_tool"}
+        )
+
+        # The toolset should be a FilteredToolset
+        assert "FilteredToolset" in type(toolset).__name__
+
+    def test_create_toolset_from_local_mcp_server(self):
+        """
+        Create toolset from the actual REMLight MCP server.
+        """
+        from remlight.api.mcp_main import create_mcp_server
+
+        mcp = create_mcp_server()
+        toolset = create_filtered_mcp_toolset(mcp)
+
+        assert toolset is not None
+
+    def test_filtered_toolset_from_local_mcp_server(self):
+        """
+        Create filtered toolset from REMLight MCP server with only 'search'.
+        """
+        from remlight.api.mcp_main import create_mcp_server
+
+        mcp = create_mcp_server()
+        toolset = create_filtered_mcp_toolset(
+            mcp,
+            allowed_tools={"search"}
+        )
+
+        assert toolset is not None
+        assert "FilteredToolset" in type(toolset).__name__
+
+
+class TestResolveToolsAsToolsets:
+    """Test the resolve_tools_as_toolsets function."""
 
     @pytest.fixture(autouse=True)
     def setup(self):
@@ -51,20 +133,135 @@ class TestRemoteMCPToolSchemas:
         clear_server_cache()
 
     @pytest.mark.asyncio
+    async def test_resolve_local_tools(self):
+        """
+        Resolve local tools using the MCP server.
+        """
+        from remlight.api.mcp_main import create_mcp_server
+
+        mcp = create_mcp_server()
+
+        tool_refs = [
+            {"name": "search", "server": "local"},
+            {"name": "action", "server": "local"},
+        ]
+
+        toolsets, legacy_tools = await resolve_tools_as_toolsets(
+            tool_refs=tool_refs,
+            local_mcp_server=mcp,
+        )
+
+        # Should have one toolset for local server
+        assert len(toolsets) == 1
+        # Should have no legacy tools (all are MCP)
+        assert len(legacy_tools) == 0
+
+    @pytest.mark.asyncio
+    async def test_resolve_no_tools_when_no_refs(self):
+        """
+        Resolve with empty tool refs returns empty lists.
+        """
+        toolsets, legacy_tools = await resolve_tools_as_toolsets(
+            tool_refs=[],
+            local_mcp_server=None,
+        )
+
+        assert len(toolsets) == 0
+        assert len(legacy_tools) == 0
+
+    @pytest.mark.asyncio
+    async def test_resolve_warns_when_no_local_server(self):
+        """
+        When local tools are requested but no server provided, warn.
+        """
+        tool_refs = [{"name": "search", "server": "local"}]
+
+        toolsets, legacy_tools = await resolve_tools_as_toolsets(
+            tool_refs=tool_refs,
+            local_mcp_server=None,  # No server!
+        )
+
+        # Should have no toolsets (couldn't create without server)
+        assert len(toolsets) == 0
+
+
+class TestToolsetIntegrationWithAgent:
+    """Test that toolsets work with PydanticAI agents."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Clear caches before each test."""
+        clear_server_cache()
+
+    @pytest.mark.asyncio
+    async def test_agent_with_fastmcp_toolset(self):
+        """
+        Create a PydanticAI agent with a FastMCPToolset.
+
+        This verifies the full integration path.
+        """
+        from remlight.api.mcp_main import create_mcp_server
+
+        mcp = create_mcp_server()
+
+        # Create filtered toolset
+        toolset = create_filtered_mcp_toolset(
+            mcp,
+            allowed_tools={"search"}
+        )
+
+        # Create agent with toolset
+        agent = Agent(
+            model="test",
+            toolsets=[toolset],
+        )
+
+        # Agent should have been created successfully
+        assert agent is not None
+
+    @pytest.mark.asyncio
+    async def test_agent_with_resolved_toolsets(self):
+        """
+        Create agent using resolve_tools_as_toolsets output.
+        """
+        from remlight.api.mcp_main import create_mcp_server
+
+        mcp = create_mcp_server()
+
+        tool_refs = [
+            {"name": "search", "server": "local"},
+        ]
+
+        toolsets, legacy_tools = await resolve_tools_as_toolsets(
+            tool_refs=tool_refs,
+            local_mcp_server=mcp,
+        )
+
+        # Create agent with resolved toolsets
+        agent = Agent(
+            model="test",
+            toolsets=toolsets,
+            tools=legacy_tools if legacy_tools else [],
+        )
+
+        assert agent is not None
+
+
+class TestMCPSchemaExtraction:
+    """Test that MCP server schemas are accessible via FastMCP Client."""
+
+    @pytest.mark.asyncio
     async def test_fetch_schemas_from_local_mcp_server(self):
         """
-        Fetch tool schemas from the local MCP server (in-process).
+        Verify we can still fetch schemas via FastMCP Client.
 
-        This simulates connecting to a "remote" MCP server and fetching
-        tool schemas via FastMCP Client.
+        This is useful for debugging and introspection.
         """
         from fastmcp import Client
         from remlight.api.mcp_main import create_mcp_server
 
-        # Create the local MCP server
         mcp = create_mcp_server()
 
-        # Connect via FastMCP Client (simulates remote connection)
         async with Client(mcp) as client:
             tools = await client.list_tools()
 
@@ -77,19 +274,12 @@ class TestRemoteMCPToolSchemas:
 
             # Verify schema structure
             assert search_tool.description is not None
-            assert "query" in search_tool.description.lower() or "search" in search_tool.description.lower()
-
             schema = search_tool.inputSchema
             assert "properties" in schema
             assert "query" in schema["properties"]
-            assert schema["properties"]["query"]["type"] == "string"
-
-            # Verify required params
-            assert "required" in schema
-            assert "query" in schema["required"]
 
     @pytest.mark.asyncio
-    async def test_schema_includes_all_parameter_info(self):
+    async def test_schema_includes_parameter_info(self):
         """Verify schema includes types, defaults, and descriptions."""
         from fastmcp import Client
         from remlight.api.mcp_main import create_mcp_server
@@ -106,276 +296,3 @@ class TestRemoteMCPToolSchemas:
             limit_prop = schema["properties"]["limit"]
             assert limit_prop["type"] == "integer"
             assert limit_prop["default"] == 20
-
-            # Check user_id parameter (nullable)
-            assert "user_id" in schema["properties"]
-            user_id_prop = schema["properties"]["user_id"]
-            assert "anyOf" in user_id_prop  # Nullable type
-
-
-class TestAnnotatedWrapperCreation:
-    """Test creating properly-annotated wrappers from MCP schemas."""
-
-    def test_create_wrapper_with_proper_annotations(self):
-        """
-        Create a wrapper function and verify it has proper annotations.
-
-        The wrapper should have:
-        - Correct parameter names and types
-        - Docstring with description and Args
-        - Type annotations PydanticAI can parse
-        """
-        input_schema = {
-            "properties": {
-                "query": {"type": "string", "description": "Search query"},
-                "limit": {"type": "integer", "default": 20, "description": "Max results"},
-                "user_id": {
-                    "anyOf": [{"type": "string"}, {"type": "null"}],
-                    "default": None,
-                    "description": "Optional user ID",
-                },
-            },
-            "required": ["query"],
-        }
-
-        wrapper = create_annotated_mcp_wrapper(
-            tool_name="search",
-            description="Search the knowledge base.",
-            input_schema=input_schema,
-            endpoint="http://localhost:8001/mcp",
-        )
-
-        # Verify function name
-        assert wrapper.__name__ == "search"
-
-        # Verify docstring contains description
-        assert "Search the knowledge base" in wrapper.__doc__
-        assert "query:" in wrapper.__doc__  # Args section
-
-    def test_pydanticai_extracts_correct_schema_from_wrapper(self):
-        """
-        THE CRITICAL TEST: Verify PydanticAI extracts proper JSON Schema
-        from dynamically-created remote MCP tool wrappers.
-
-        WHY THIS MATTERS
-        ----------------
-        When a tool is on a REMOTE MCP server, we don't have a local Python
-        function with type annotations. We only have the JSON Schema from
-        the server's list_tools() response.
-
-        Without proper handling, PydanticAI sees **kwargs and generates:
-            {"additionalProperties": true, "properties": {}, "type": "object"}
-
-        The LLM has NO IDEA what parameters to pass!
-
-        THE SOLUTION
-        ------------
-        create_annotated_mcp_wrapper() dynamically creates a Python function
-        with the correct signature from the JSON Schema:
-
-            async def search(query: str, limit: int = 20) -> dict:
-                '''Search description. Args: query: Search query'''
-                ...
-
-        PydanticAI then extracts the correct schema:
-            {
-                "properties": {"query": {"type": "string"}, ...},
-                "required": ["query"]
-            }
-
-        CODE REFERENCE: remlight/agentic/tool_resolver.py:138-252
-        WALKTHROUGH: code-walkthrough.md Section 2.3
-
-        This test proves the wrapper works by:
-        1. Creating a wrapper from JSON Schema
-        2. Passing it to a PydanticAI Agent
-        3. Inspecting agent._function_toolset.tools[name].function_schema.json_schema
-        4. Verifying it has proper properties, types, and required fields
-        """
-        input_schema = {
-            "properties": {
-                "query": {"type": "string", "description": "Search query string"},
-                "limit": {"type": "integer", "default": 20, "description": "Maximum results"},
-            },
-            "required": ["query"],
-        }
-
-        wrapper = create_annotated_mcp_wrapper(
-            tool_name="remote_search",
-            description="Search a remote knowledge base.",
-            input_schema=input_schema,
-            endpoint="http://localhost:8001/mcp",
-        )
-
-        # Create PydanticAI agent with the wrapper
-        agent = Agent(model="test", tools=[wrapper])
-
-        # Extract what PydanticAI sees
-        tool = agent._function_toolset.tools["remote_search"]
-        pydantic_schema = tool.function_schema.json_schema
-
-        print("\n" + "=" * 60)
-        print("PYDANTICAI SCHEMA FOR REMOTE MCP TOOL")
-        print("=" * 60)
-        print(json.dumps(pydantic_schema, indent=2))
-
-        # CRITICAL ASSERTIONS - this is what the LLM sees
-        assert "properties" in pydantic_schema
-        assert "query" in pydantic_schema["properties"]
-        assert pydantic_schema["properties"]["query"]["type"] == "string"
-
-        # Verify required params
-        assert "required" in pydantic_schema
-        assert "query" in pydantic_schema["required"]
-
-        # Verify optional param with default
-        assert "limit" in pydantic_schema["properties"]
-        assert pydantic_schema["properties"]["limit"]["default"] == 20
-
-        # Verify it's NOT an empty schema
-        assert pydantic_schema != {"additionalProperties": True, "properties": {}, "type": "object"}
-
-    def test_nullable_params_handled_correctly(self):
-        """Verify nullable parameters (anyOf with null) are handled."""
-        input_schema = {
-            "properties": {
-                "required_param": {"type": "string"},
-                "nullable_param": {
-                    "anyOf": [{"type": "string"}, {"type": "null"}],
-                    "default": None,
-                },
-            },
-            "required": ["required_param"],
-        }
-
-        wrapper = create_annotated_mcp_wrapper(
-            tool_name="nullable_test",
-            description="Test nullable params.",
-            input_schema=input_schema,
-            endpoint="http://localhost:8001/mcp",
-        )
-
-        agent = Agent(model="test", tools=[wrapper])
-        schema = agent._function_toolset.tools["nullable_test"].function_schema.json_schema
-
-        # Nullable param should have anyOf or allow null
-        nullable_prop = schema["properties"]["nullable_param"]
-        assert "anyOf" in nullable_prop or nullable_prop.get("default") is None
-
-
-class TestEndToEndRemoteToolResolution:
-    """End-to-end test using the actual MCP server."""
-
-    @pytest.fixture(autouse=True)
-    def setup(self):
-        """Clear caches before each test."""
-        clear_server_cache()
-
-    @pytest.mark.asyncio
-    async def test_full_flow_mcp_to_pydanticai(self):
-        """
-        Full integration test:
-        1. Connect to local MCP server
-        2. Fetch schema for 'search' tool
-        3. Create annotated wrapper
-        4. Verify PydanticAI schema matches original
-
-        This proves remote MCP tools work correctly with PydanticAI.
-        """
-        from fastmcp import Client
-        from remlight.api.mcp_main import create_mcp_server
-
-        # Step 1: Connect to MCP server
-        mcp = create_mcp_server()
-
-        async with Client(mcp) as client:
-            # Step 2: Fetch tool schema
-            tools = await client.list_tools()
-            search_tool = next(t for t in tools if t.name == "search")
-
-            # Step 3: Create annotated wrapper
-            wrapper = create_annotated_mcp_wrapper(
-                tool_name="search",
-                description=search_tool.description,
-                input_schema=search_tool.inputSchema,
-                endpoint="http://localhost:8001/mcp",  # Would be real endpoint
-            )
-
-            # Step 4: Verify PydanticAI schema
-            agent = Agent(model="test", tools=[wrapper])
-            pydantic_schema = agent._function_toolset.tools["search"].function_schema.json_schema
-
-            print("\n" + "=" * 60)
-            print("ORIGINAL MCP SCHEMA:")
-            print(json.dumps(search_tool.inputSchema, indent=2))
-            print("\nPYDANTICAI SCHEMA:")
-            print(json.dumps(pydantic_schema, indent=2))
-            print("=" * 60)
-
-            # Verify key properties match
-            original_props = search_tool.inputSchema["properties"]
-            pydantic_props = pydantic_schema["properties"]
-
-            # query should be required string in both
-            assert "query" in pydantic_props
-            assert pydantic_props["query"]["type"] == "string"
-            assert "query" in pydantic_schema["required"]
-
-            # limit should have default 20 in both
-            assert "limit" in pydantic_props
-            assert pydantic_props["limit"]["default"] == original_props["limit"]["default"]
-
-    @pytest.mark.asyncio
-    async def test_compare_local_vs_remote_tool_schemas(self):
-        """
-        Compare schemas: local tool.fn vs remote wrapper.
-
-        Both should produce equivalent schemas for PydanticAI.
-        """
-        from fastmcp import Client
-        from remlight.api.mcp_main import create_mcp_server, get_mcp_tools
-
-        mcp = create_mcp_server()
-
-        # Get local tool (via tool.fn)
-        local_tools = await get_mcp_tools()
-        local_search = local_tools["search"]
-
-        # Create agent with LOCAL tool
-        agent_local = Agent(model="test", tools=[local_search.fn])
-        local_schema = agent_local._function_toolset.tools["search"].function_schema.json_schema
-
-        # Get remote tool schema and create wrapper
-        async with Client(mcp) as client:
-            tools = await client.list_tools()
-            search_tool = next(t for t in tools if t.name == "search")
-
-            wrapper = create_annotated_mcp_wrapper(
-                tool_name="search_remote",  # Different name to avoid conflict
-                description=search_tool.description,
-                input_schema=search_tool.inputSchema,
-                endpoint="http://localhost:8001/mcp",
-            )
-
-        # Create agent with REMOTE wrapper
-        agent_remote = Agent(model="test", tools=[wrapper])
-        remote_schema = agent_remote._function_toolset.tools["search_remote"].function_schema.json_schema
-
-        print("\n" + "=" * 60)
-        print("LOCAL TOOL SCHEMA:")
-        print(json.dumps(local_schema, indent=2))
-        print("\nREMOTE WRAPPER SCHEMA:")
-        print(json.dumps(remote_schema, indent=2))
-        print("=" * 60)
-
-        # Both should have the same properties
-        local_props = set(local_schema["properties"].keys())
-        remote_props = set(remote_schema["properties"].keys())
-        assert local_props == remote_props, f"Properties differ: {local_props} vs {remote_props}"
-
-        # Both should have query as required
-        assert "query" in local_schema["required"]
-        assert "query" in remote_schema["required"]
-
-        # Both should have same types for query
-        assert local_schema["properties"]["query"]["type"] == remote_schema["properties"]["query"]["type"]

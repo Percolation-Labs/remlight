@@ -15,7 +15,7 @@ The flow is: YAML Schema → AgentSchema → Pydantic Model → pydantic_ai.Agen
     3. This module (provider.py) creates the pydantic-ai Agent:
        - Extracts system prompt from schema.description
        - Builds output model from schema.properties (if structured_output=true)
-       - Filters and attaches MCP tools (or resources) based on schema.tools list
+       - Filters and attaches MCP tools via FastMCPToolset based on schema.tools list
        - Configures LLM model, temperature, max_iterations
 
 KEY DESIGN PATTERNS
@@ -51,13 +51,16 @@ KEY DESIGN PATTERNS
    _convert_properties_to_prompt() renders the JSON Schema as YAML-like guidance text
    that's appended to the system prompt. This informs without enforcing.
 
-5. **Tool Filtering by Schema Configuration**
+5. **Tool Resolution via FastMCPToolset**
    The schema.json_schema_extra.tools list controls which tools the agent can access:
    - Empty list [] = Agent cannot use any tools
    - Specific tools [{name: "search"}] = Only those tools are available
    - Not specified = All provided tools are available
 
-   This enables fine-grained control over agent capabilities per-agent.
+   Tools are resolved using FastMCPToolset which:
+   - Connects to local or remote MCP servers
+   - Automatically handles schema extraction and type annotations
+   - Supports filtering via .filtered() method
 
 6. **Agent Instance Cache**
    The cache stores AgentRuntime instances keyed by (schema_hash, model, user_id).
@@ -70,21 +73,16 @@ USAGE EXAMPLE
     # Load schema from YAML file
     schema = schema_from_yaml_file("schemas/query-agent.yaml")
 
-    # Create agent runtime with tools
+    # Create agent runtime with MCP server
     runtime = await create_agent(
         schema=schema,
         model_name="openai:gpt-4.1",
-        tools=[search_tool, action_tool],
+        mcp_server=local_mcp_server,  # FastMCP server instance
         context=agent_context,
     )
 
     # Use the agent
     result = await runtime.agent.run("Find documents about machine learning")
-
-FUTURE WORK
------------
-- Remote MCP tool support via FastMCP client (not yet implemented)
-- Dynamic tool loading from MCP server URIs
 """
 
 import asyncio
@@ -643,6 +641,7 @@ async def create_agent(
     schema: dict[str, Any] | AgentSchema,
     model_name: str | None = None,
     tools: list | None = None,
+    mcp_server: Any | None = None,
     context: AgentContext | None = None,
     structured_output_override: bool | None = None,
     use_cache: bool = True,
@@ -655,7 +654,7 @@ async def create_agent(
     - Configured LLM model
     - System prompt from schema description
     - Structured output (if enabled) with description-stripped JSON schema
-    - Filtered tool set based on schema configuration
+    - Filtered toolsets based on schema configuration via FastMCPToolset
 
     THE AGENT CREATION PIPELINE
     ---------------------------
@@ -666,8 +665,8 @@ async def create_agent(
     5. Configure output type:
        - structured_output=true: Generate Pydantic model, wrap to strip description
        - structured_output=false: Append schema guidance to prompt, use text output
-    6. Filter tools based on schema.json_schema_extra.tools
-    7. Create pydantic-ai Agent with all configuration
+    6. Resolve tools via FastMCPToolset with filtering
+    7. Create pydantic-ai Agent with toolsets parameter
     8. Cache and return AgentRuntime bundle
 
     OUTPUT TYPE SELECTION
@@ -682,11 +681,17 @@ async def create_agent(
     2. The `action` tool handles structured metadata emission
     3. Structured output constrains LLM creativity
 
-    TOOL FILTERING
-    -------------
+    TOOL RESOLUTION VIA FASTMCPTOOLSET
+    ----------------------------------
+    Tools are resolved using FastMCPToolset which handles:
+    - Schema fetching from MCP servers
+    - Type annotation generation (no more exec() code generation!)
+    - Automatic caching
+    - Filtering via .filtered() method
+
     The schema's `tools` list controls agent capabilities:
 
-        # No tools list = ALL provided tools available
+        # No tools list = NO tools available
         json_schema_extra:
           tools: []  # Empty = NO tools available
 
@@ -694,9 +699,8 @@ async def create_agent(
           tools:
             - name: search    # Only search available
             - name: action    # Only action available
-
-    This enables creating restricted agents that can only use specific tools,
-    or unrestricted agents that have access to everything.
+            - name: remote_tool
+              server: data-service  # From remote MCP server
 
     CACHING
     -------
@@ -718,8 +722,10 @@ async def create_agent(
         schema: Agent definition as dict (raw YAML) or AgentSchema (parsed)
         model_name: LLM model identifier (e.g., "openai:gpt-4.1", "anthropic:claude-sonnet-4-5-20250929")
                    Overrides settings.llm.default_model, but NOT schema.override_model
-        tools: List of tool functions or dict of {name: FunctionTool}
-               These are filtered based on schema.tools configuration
+        tools: List of tool functions or dict of {name: FunctionTool} (legacy)
+               Only used if mcp_server is not provided. Prefer mcp_server.
+        mcp_server: FastMCP server instance for local tools. This is the preferred
+                   way to provide tools as it enables FastMCPToolset with filtering.
         context: AgentContext with session info and user_profile_hint
         structured_output_override: Optional override for structured_output mode.
                    When provided, overrides the agent schema's structured_output setting.
@@ -735,12 +741,16 @@ async def create_agent(
         - schema_name: Name of the schema for logging/tracing
 
     Example:
-        # Load and create a query agent
+        # Load and create a query agent with MCP server
+        from remlight.api.mcp_main import create_mcp_server
+
         schema = schema_from_yaml_file("schemas/query-agent.yaml")
+        mcp_server = create_mcp_server()
+
         runtime = await create_agent(
             schema=schema,
             model_name="openai:gpt-4.1",
-            tools=mcp_tools,
+            mcp_server=mcp_server,
             context=AgentContext(user_id="user-123", session_id="sess-456"),
         )
         result = await runtime.agent.run("Find documents about AI")
@@ -827,9 +837,9 @@ async def create_agent(
             system_prompt = system_prompt + "\n\n" + properties_prompt
 
     # =========================================================================
-    # TOOL FILTERING AND RESOLUTION
+    # TOOL RESOLUTION VIA FASTMCPTOOLSET
     # =========================================================================
-    # Filter provided tools based on schema.json_schema_extra.tools configuration
+    # Resolve tools using FastMCPToolset for automatic schema handling.
     #
     # IMPORTANT: Only explicitly listed tools are available to agents.
     # This prevents global tool leakage and ensures agents only have access
@@ -840,13 +850,14 @@ async def create_agent(
     # 2. tools: [] (empty list) → NO tools available
     # 3. tools: [{name: "x"}] → only named tools available
     #
-    # Remote server support:
-    # - Tools can specify a "server" field to load from registered servers
-    # - server: None or "local" → use local tools
-    # - server: "data-service" → load from registered remote server
+    # Resolution approach:
+    # - If mcp_server provided: Use FastMCPToolset with .filtered() for filtering
+    # - If only tools provided: Legacy path using tool.fn extraction
+    # - Remote servers: Use FastMCPToolset with server endpoint
     # =========================================================================
 
-    agent_tools = []
+    agent_toolsets: list[Any] = []
+    agent_tools: list[Any] = []
     schema_tools = meta.tools  # List of MCPToolReference or dicts
 
     # If no tools specified in schema, agent gets NO tools (avoid global tool leakage)
@@ -854,51 +865,44 @@ async def create_agent(
         logger.debug(f"Agent '{meta.name}' has no tools specified - no tools will be available")
         schema_tools = []
 
-    # Check if any tools reference remote servers
-    has_remote_tools = False
-    for t in schema_tools:
-        server = None
-        if hasattr(t, "server"):
-            server = t.server
-        elif isinstance(t, dict):
-            server = t.get("server") or t.get("mcp_server")
-        if server and server != "local":
-            has_remote_tools = True
-            break
+    if schema_tools:
+        # Use FastMCPToolset-based resolution
+        from remlight.agentic.tool_resolver import resolve_tools_as_toolsets
 
-    # Extract allowed tool names from schema (handles both MCPToolReference and dict)
-    # Only tools in this set will be available to the agent
-    allowed_tool_names: set[str] = set()
-    for t in schema_tools:
-        if hasattr(t, "name"):  # MCPToolReference object
-            allowed_tool_names.add(t.name)
-        elif isinstance(t, dict) and "name" in t:  # Plain dict from YAML
-            allowed_tool_names.add(t["name"])
+        toolsets, legacy_tools = await resolve_tools_as_toolsets(
+            tool_refs=schema_tools,
+            local_mcp_server=mcp_server,
+            context=context,
+        )
+        agent_toolsets = toolsets
+        agent_tools = legacy_tools
 
-    # If schema has remote tools, use the tool resolver
-    if has_remote_tools and schema_tools:
-        from remlight.agentic.tool_resolver import resolve_tools
-        agent_tools = await resolve_tools(schema_tools, tools, context)
-    elif tools and allowed_tool_names:
-        # Local-only tools path - only add tools that are explicitly listed in schema
+        logger.debug(
+            f"Resolved {len(agent_toolsets)} toolsets and {len(agent_tools)} legacy tools "
+            f"for agent '{meta.name}'"
+        )
+
+    # Fallback: Legacy tools path if no mcp_server but tools dict/list provided
+    if not agent_toolsets and not agent_tools and tools and schema_tools:
+        # Extract allowed tool names from schema
+        allowed_tool_names: set[str] = set()
+        for t in schema_tools:
+            if hasattr(t, "name"):
+                allowed_tool_names.add(t.name)
+            elif isinstance(t, dict) and "name" in t:
+                allowed_tool_names.add(t["name"])
+
         if isinstance(tools, dict):
-            # FastMCP format: {name: FunctionTool}
-            # FunctionTool has .fn attribute with the actual callable
             for name, tool in tools.items():
-                # Only add tools that are explicitly listed in schema
                 if name not in allowed_tool_names:
                     continue
-                # Extract callable from FunctionTool or use directly
                 if hasattr(tool, "fn"):
                     agent_tools.append(tool.fn)
                 elif callable(tool):
                     agent_tools.append(tool)
-
         elif isinstance(tools, list):
-            # List of callables or FunctionTool objects
             for tool in tools:
                 tool_name = getattr(tool, "__name__", None) or getattr(tool, "name", None)
-                # Only add tools that are explicitly listed in schema
                 if not tool_name or tool_name not in allowed_tool_names:
                     continue
                 if hasattr(tool, "fn"):
@@ -913,17 +917,23 @@ async def create_agent(
     # This is the final step that produces the executable agent
     # =========================================================================
 
-    logger.debug(f"Creating agent with {len(agent_tools)} tools: {[t.__name__ if hasattr(t, '__name__') else str(t) for t in agent_tools]}")
-    # Log the docstrings of each tool so we can verify what the model will see
+    logger.debug(
+        f"Creating agent with {len(agent_toolsets)} toolsets and {len(agent_tools)} tools"
+    )
+    # Log the docstrings of legacy tools so we can verify what the model will see
     for t in agent_tools:
         if hasattr(t, '__doc__') and t.__doc__:
             doc_preview = t.__doc__[:200].replace('\n', ' ')
             logger.debug(f"Tool '{getattr(t, '__name__', 'unknown')}' docstring: {doc_preview}...")
+
+    # Build agent with toolsets (preferred) and/or tools (legacy)
+    # Note: pydantic-ai requires empty lists, not None
     agent = Agent(
         model=resolved_model,
         system_prompt=system_prompt,
         output_type=output_type,
-        tools=agent_tools,
+        toolsets=agent_toolsets if agent_toolsets else [],
+        tools=agent_tools if agent_tools else [],
     )
 
     # Bundle agent with runtime config for downstream use

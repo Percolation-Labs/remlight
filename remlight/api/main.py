@@ -50,6 +50,19 @@ from remlight.api.routers.ontology import router as ontology_router
 from remlight.api.mcp_main import get_mcp_server, init_mcp
 
 
+# Module-level MCP HTTP app (needed for lifespan management)
+_mcp_http_app = None
+
+
+def get_mcp_http_app():
+    """Get or create the MCP HTTP app."""
+    global _mcp_http_app
+    if _mcp_http_app is None:
+        mcp = get_mcp_server()
+        _mcp_http_app = mcp.http_app(path="/", transport="streamable-http")
+    return _mcp_http_app
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown."""
@@ -78,7 +91,10 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Tool auto-registration failed: {e}")
 
-    yield
+    # Start MCP server's lifespan (required for HTTP transport)
+    mcp_http = get_mcp_http_app()
+    async with mcp_http.lifespan(app):
+        yield
 
     # Cleanup
     await db.disconnect()
@@ -103,8 +119,8 @@ def create_app() -> FastAPI:
     )
 
     # Mount MCP server at /api/v1/mcp
-    mcp = get_mcp_server()
-    mcp_http = mcp.http_app(path="/", transport="http")
+    # Note: The MCP http_app lifespan is managed in the main lifespan context
+    mcp_http = get_mcp_http_app()
     app.mount("/api/v1/mcp", mcp_http)
 
     # Include routers with /api/v1 prefix

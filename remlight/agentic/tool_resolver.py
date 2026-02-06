@@ -2,20 +2,27 @@
 Tool Resolver - Load tools from local and remote MCP servers
 =============================================================
 
-This module handles resolving tool references in agent schemas to actual
-callable functions with PROPER TYPE ANNOTATIONS for PydanticAI.
+This module handles resolving tool references in agent schemas to toolsets
+for PydanticAI using FastMCPToolset.
 
-KEY INSIGHT: PydanticAI requires properly-annotated functions
---------------------------------------------------------------
-PydanticAI extracts tool schemas from function signatures and docstrings.
-Remote tools must be wrapped in functions with proper type annotations,
-otherwise the LLM receives an empty schema and doesn't know what params to use.
+SIMPLIFIED ARCHITECTURE (using FastMCPToolset)
+----------------------------------------------
+FastMCPToolset from pydantic-ai handles:
+- Schema fetching from MCP servers
+- Type annotation generation
+- Tool wrapper creation
+- Caching
+
+We just need to:
+1. Create FastMCPToolset instances for each server
+2. Apply filtering based on agent schema's allowed tools
+3. Return toolsets for the Agent
 
 SUPPORTED SERVER TYPES
 ----------------------
-- Local tools: Built-in tools from the project's MCP server (tool.fn)
-- MCP servers: Remote MCP servers accessed via FastMCP Client
-- REST servers: Remote REST APIs (legacy, no schema introspection)
+- Local tools: Built-in tools from the project's MCP server
+- MCP servers: Remote MCP servers accessed via FastMCPToolset
+- REST servers: Legacy REST APIs (still uses manual wrapper)
 
 RESOLUTION FLOW
 ---------------
@@ -29,24 +36,14 @@ RESOLUTION FLOW
        server: data-service  # registered MCP server
    ```
 
-2. resolve_tools() is called with the tool references
+2. resolve_tools_as_toolsets() is called with the tool references
 
-3. For each tool:
-   a. If server is "local" or None: Use local tool.fn (already annotated)
-   b. If server is MCP type: Connect via FastMCP Client, fetch schema, build annotated wrapper
-   c. If server is REST type: Create wrapper (no schema - legacy)
+3. For each server:
+   a. Create FastMCPToolset (local or remote)
+   b. Apply .filtered() to restrict to allowed tools
+   c. Return list of toolsets for Agent
 
-4. Return list of properly-annotated callables for PydanticAI
-
-ANNOTATED WRAPPER CREATION
---------------------------
-For remote MCP tools, we:
-1. Connect to the MCP server via FastMCP Client
-2. Call list_tools() to get tool schemas (name, description, inputSchema)
-3. Build a Python function with proper type annotations from the JSON Schema
-4. The wrapper calls client.call_tool() to execute the remote tool
-
-This ensures PydanticAI generates the correct JSON Schema for the LLM.
+4. Agent uses toolsets=[] parameter instead of tools=[]
 """
 
 from typing import Any, Callable
@@ -61,9 +58,6 @@ from remlight.services.repository import Repository
 
 # Cache for resolved servers
 _server_cache: dict[str, Server] = {}
-
-# Cache for MCP tool schemas: {server_endpoint: {tool_name: MCPToolInfo}}
-_mcp_schema_cache: dict[str, dict[str, Any]] = {}
 
 
 async def get_server(server_name: str) -> Server | None:
@@ -81,175 +75,43 @@ async def get_server(server_name: str) -> Server | None:
 def clear_server_cache():
     """Clear the server cache."""
     _server_cache.clear()
-    _mcp_schema_cache.clear()
 
 
 # =============================================================================
-# MCP TOOL SCHEMA FETCHING
+# FASTMCP TOOLSET CREATION
 # =============================================================================
 
 
-async def fetch_mcp_tool_schemas(endpoint: str) -> dict[str, Any]:
+def create_filtered_mcp_toolset(
+    server_or_endpoint: Any,
+    allowed_tools: set[str] | None = None,
+) -> Any:
     """
-    Fetch tool schemas from an MCP server via FastMCP Client.
+    Create a FastMCPToolset with optional tool filtering.
 
     Args:
-        endpoint: MCP server URL (e.g., "http://localhost:8001/mcp")
+        server_or_endpoint: Either a FastMCP server instance or endpoint URL string
+        allowed_tools: Set of tool names to allow. If None, all tools are allowed.
 
     Returns:
-        Dict mapping tool names to their schema info:
-        {
-            "search": {
-                "name": "search",
-                "description": "Search the knowledge base...",
-                "inputSchema": {"properties": {...}, "required": [...]}
-            }
-        }
+        FastMCPToolset (filtered if allowed_tools provided)
     """
-    if endpoint in _mcp_schema_cache:
-        return _mcp_schema_cache[endpoint]
+    from pydantic_ai.toolsets.fastmcp import FastMCPToolset
 
-    try:
-        from fastmcp import Client
+    toolset = FastMCPToolset(server_or_endpoint)
 
-        async with Client(endpoint) as client:
-            tools = await client.list_tools()
-            schemas = {}
-            for tool in tools:
-                schemas[tool.name] = {
-                    "name": tool.name,
-                    "description": tool.description or f"Remote tool: {tool.name}",
-                    "inputSchema": tool.inputSchema or {"type": "object", "properties": {}},
-                }
-            _mcp_schema_cache[endpoint] = schemas
-            logger.debug(f"Fetched {len(schemas)} tool schemas from {endpoint}")
-            return schemas
+    if allowed_tools:
+        # Filter to only allowed tools
+        return toolset.filtered(
+            lambda ctx, tool_def: tool_def.name in allowed_tools
+        )
 
-    except Exception as e:
-        logger.error(f"Failed to fetch MCP tool schemas from {endpoint}: {e}")
-        return {}
+    return toolset
 
 
 # =============================================================================
-# ANNOTATED WRAPPER CREATION
+# REST TOOL WRAPPER (Legacy - no schema introspection)
 # =============================================================================
-
-
-def create_annotated_mcp_wrapper(
-    tool_name: str,
-    description: str,
-    input_schema: dict[str, Any],
-    endpoint: str,
-    context: AgentContext | None = None,
-) -> Callable:
-    """
-    Create a properly-annotated wrapper for a remote MCP tool.
-
-    This function dynamically creates a Python function with:
-    - Proper parameter names and types from the JSON Schema
-    - Docstring with description and Args section
-    - Type annotations that PydanticAI can parse
-
-    Args:
-        tool_name: Name of the tool
-        description: Tool description (for docstring)
-        input_schema: JSON Schema for the tool's input parameters
-        endpoint: MCP server endpoint URL
-        context: Optional context for user/session info
-
-    Returns:
-        Async callable with proper annotations for PydanticAI
-    """
-    # Map JSON Schema types to Python types
-    type_map = {
-        "string": "str",
-        "integer": "int",
-        "number": "float",
-        "boolean": "bool",
-        "array": "list",
-        "object": "dict",
-    }
-
-    # Parse JSON Schema properties
-    props = input_schema.get("properties", {})
-    required = set(input_schema.get("required", []))
-
-    # Build parameter strings and docstring args
-    param_strs = []
-    docstring_args = []
-
-    for name, prop in props.items():
-        prop_type = prop.get("type", "string")
-        py_type = type_map.get(prop_type, "Any")
-
-        # Handle nullable (anyOf with null)
-        any_of = prop.get("anyOf", [])
-        is_nullable = any(t.get("type") == "null" for t in any_of)
-        if is_nullable:
-            # Get the non-null type
-            for t in any_of:
-                if t.get("type") != "null":
-                    py_type = type_map.get(t.get("type", "string"), "Any")
-                    break
-            py_type = f"{py_type} | None"
-
-        # Build parameter string
-        if name in required:
-            param_strs.append(f"{name}: {py_type}")
-        else:
-            default = prop.get("default")
-            default_repr = repr(default)
-            param_strs.append(f"{name}: {py_type} = {default_repr}")
-
-        # Build docstring arg
-        param_desc = prop.get("description", "")
-        if param_desc:
-            docstring_args.append(f"        {name}: {param_desc}")
-
-    # Build full docstring
-    docstring_parts = [description]
-    if docstring_args:
-        docstring_parts.append("\n    Args:")
-        docstring_parts.extend(docstring_args)
-
-    full_docstring = "\n".join(docstring_parts)
-
-    # Build the wrapper function code
-    params_str = ", ".join(param_strs) if param_strs else ""
-
-    # Create unique function to avoid closure issues
-    func_code = f'''
-async def {tool_name}({params_str}) -> dict:
-    """
-    {full_docstring}
-    """
-    # Collect all arguments
-    import inspect
-    frame = inspect.currentframe()
-    args = {{k: v for k, v in frame.f_locals.items() if k not in ("inspect", "frame")}}
-
-    # Call the remote MCP tool
-    from fastmcp import Client
-    async with Client("{endpoint}") as client:
-        result = await client.call_tool("{tool_name}", args)
-        # Extract content from MCP response
-        if hasattr(result, "content") and result.content:
-            content = result.content[0]
-            if hasattr(content, "text"):
-                import json
-                try:
-                    return json.loads(content.text)
-                except:
-                    return {{"result": content.text}}
-        return {{"result": str(result)}}
-'''
-
-    # Execute to create the function
-    exec_globals = {"__builtins__": __builtins__}
-    exec(func_code, exec_globals)
-    func = exec_globals[tool_name]
-
-    return func
 
 
 def create_rest_tool_wrapper(
@@ -319,17 +181,150 @@ def create_rest_tool_wrapper(
 # =============================================================================
 
 
+async def resolve_tools_as_toolsets(
+    tool_refs: list[MCPToolReference | dict],
+    local_mcp_server: Any | None = None,
+    context: AgentContext | None = None,
+) -> tuple[list[Any], list[Callable]]:
+    """
+    Resolve tool references to FastMCPToolsets and legacy tool callables.
+
+    This is the main entry point for tool resolution. It takes tool references
+    from an agent schema and returns:
+    - List of FastMCPToolset instances (for MCP servers)
+    - List of callable functions (for REST servers - legacy)
+
+    Args:
+        tool_refs: List of MCPToolReference or dicts with name/server
+        local_mcp_server: Local FastMCP server instance (for "local" tools)
+        context: Optional context for REST tool calls
+
+    Returns:
+        Tuple of (toolsets, legacy_tools)
+        - toolsets: List of FastMCPToolset instances
+        - legacy_tools: List of callable functions (for REST servers)
+    """
+    toolsets: list[Any] = []
+    legacy_tools: list[Callable] = []
+
+    # Group tools by server for efficient toolset creation
+    tools_by_server: dict[str, set[str]] = {}
+
+    for ref in tool_refs:
+        # Duck typing: check for name attribute (supports MCPToolReference from any module)
+        if hasattr(ref, "name"):
+            tool_name = ref.name
+            server_name = getattr(ref, "server", None) or "local"
+        elif isinstance(ref, dict):
+            tool_name = ref.get("name", "")
+            server_name = ref.get("server") or ref.get("mcp_server") or "local"
+        else:
+            continue
+
+        if not tool_name:
+            continue
+
+        if server_name not in tools_by_server:
+            tools_by_server[server_name] = set()
+        tools_by_server[server_name].add(tool_name)
+
+    # Create toolsets for each server
+    for server_name, tool_names in tools_by_server.items():
+        if server_name == "local":
+            # Use local FastMCP server instance
+            if local_mcp_server:
+                toolset = create_filtered_mcp_toolset(
+                    local_mcp_server,
+                    allowed_tools=tool_names,
+                )
+                toolsets.append(toolset)
+            else:
+                logger.warning("Local tools requested but no local_mcp_server provided")
+        else:
+            # Load from remote server
+            server = await get_server(server_name)
+            if not server:
+                logger.warning(f"Server '{server_name}' not found")
+                continue
+
+            if not server.enabled:
+                logger.warning(f"Server '{server_name}' is disabled")
+                continue
+
+            if server.server_type == "mcp" and server.endpoint:
+                # MCP server - use FastMCPToolset
+                toolset = create_filtered_mcp_toolset(
+                    server.endpoint,
+                    allowed_tools=tool_names,
+                )
+                toolsets.append(toolset)
+                logger.debug(
+                    f"Created FastMCPToolset for '{server_name}' with tools: {tool_names}"
+                )
+
+            elif server.server_type == "rest":
+                # REST server - legacy wrapper (no schema)
+                for tool_name in tool_names:
+                    wrapper = create_rest_tool_wrapper(server, tool_name, context)
+                    legacy_tools.append(wrapper)
+                    logger.warning(
+                        f"REST tool '{tool_name}' has no schema - LLM may not know params"
+                    )
+
+            elif server.server_type == "stdio":
+                # stdio server - use FastMCPToolset with stdio transport
+                try:
+                    from fastmcp.client.transports import StdioTransport
+
+                    command = server.config.get("command", [])
+                    if command:
+                        transport = StdioTransport(command=command)
+                        toolset = create_filtered_mcp_toolset(
+                            transport,
+                            allowed_tools=tool_names,
+                        )
+                        toolsets.append(toolset)
+                        logger.debug(
+                            f"Created stdio FastMCPToolset for '{server_name}'"
+                        )
+                    else:
+                        logger.warning(
+                            f"stdio server '{server_name}' has no command configured"
+                        )
+                except ImportError:
+                    logger.warning(
+                        f"stdio transport not available for '{server_name}'"
+                    )
+
+            else:
+                logger.warning(
+                    f"Unknown server type '{server.server_type}' for '{server_name}'"
+                )
+
+    return toolsets, legacy_tools
+
+
+# =============================================================================
+# LEGACY COMPATIBILITY FUNCTIONS
+# =============================================================================
+# These functions maintain backward compatibility with code that expects
+# a list of callables instead of toolsets.
+# =============================================================================
+
+
 async def resolve_tools(
     tool_refs: list[MCPToolReference | dict],
     local_tools: dict[str, Any] | list | None = None,
     context: AgentContext | None = None,
 ) -> list[Callable]:
     """
-    Resolve tool references to properly-annotated callable tools.
+    Legacy function - resolve tool references to callable tools.
 
-    This is the main entry point for tool resolution. It takes tool references
-    from an agent schema and returns callable functions with proper type
-    annotations for PydanticAI.
+    DEPRECATED: Use resolve_tools_as_toolsets() instead for better performance.
+
+    This function maintains backward compatibility by extracting callables
+    from local tools dict/list. For remote tools, it returns REST wrappers only
+    (MCP tools should use the toolset approach).
 
     Args:
         tool_refs: List of MCPToolReference or dicts with name/server
@@ -337,7 +332,7 @@ async def resolve_tools(
         context: Optional context for remote tool calls
 
     Returns:
-        List of callable async functions with proper annotations
+        List of callable async functions
     """
     resolved_tools: list[Callable] = []
 
@@ -352,13 +347,14 @@ async def resolve_tools(
                 if name:
                     local_tools_dict[name] = tool
 
-    # Group tools by server for efficient schema fetching
+    # Group tools by server
     tools_by_server: dict[str, list[str]] = {}
 
     for ref in tool_refs:
-        if isinstance(ref, MCPToolReference):
+        # Duck typing: check for name attribute (supports MCPToolReference from any module)
+        if hasattr(ref, "name"):
             tool_name = ref.name
-            server_name = ref.server or "local"
+            server_name = getattr(ref, "server", None) or "local"
         elif isinstance(ref, dict):
             tool_name = ref.get("name", "")
             server_name = ref.get("server") or ref.get("mcp_server") or "local"
@@ -386,7 +382,7 @@ async def resolve_tools(
                 else:
                     logger.warning(f"Local tool '{tool_name}' not found")
         else:
-            # Load from remote server
+            # Load from remote server - only REST supported in legacy mode
             server = await get_server(server_name)
             if not server:
                 logger.warning(f"Server '{server_name}' not found")
@@ -396,40 +392,16 @@ async def resolve_tools(
                 logger.warning(f"Server '{server_name}' is disabled")
                 continue
 
-            if server.server_type == "mcp" and server.endpoint:
-                # MCP server - fetch schemas and create annotated wrappers
-                schemas = await fetch_mcp_tool_schemas(server.endpoint)
-
-                for tool_name in tool_names:
-                    if tool_name in schemas:
-                        schema_info = schemas[tool_name]
-                        wrapper = create_annotated_mcp_wrapper(
-                            tool_name=tool_name,
-                            description=schema_info["description"],
-                            input_schema=schema_info["inputSchema"],
-                            endpoint=server.endpoint,
-                            context=context,
-                        )
-                        resolved_tools.append(wrapper)
-                    else:
-                        logger.warning(
-                            f"Tool '{tool_name}' not found on MCP server '{server_name}'"
-                        )
-
-            elif server.server_type == "rest":
-                # REST server - legacy wrapper (no schema)
+            if server.server_type == "rest":
+                # REST server - legacy wrapper
                 for tool_name in tool_names:
                     wrapper = create_rest_tool_wrapper(server, tool_name, context)
                     resolved_tools.append(wrapper)
-                    logger.warning(
-                        f"REST tool '{tool_name}' has no schema - LLM may not know params"
-                    )
-
-            elif server.server_type == "stdio":
-                logger.warning(f"stdio server type not yet implemented for '{server_name}'")
-
             else:
-                logger.warning(f"Unknown server type '{server.server_type}' for '{server_name}'")
+                logger.warning(
+                    f"Legacy resolve_tools() doesn't support '{server.server_type}' servers. "
+                    f"Use resolve_tools_as_toolsets() for MCP servers."
+                )
 
     return resolved_tools
 
@@ -441,7 +413,9 @@ async def resolve_tools_for_agent(
     allowed_tool_names: set[str] | None = None,
 ) -> list[Callable]:
     """
-    Resolve tools for an agent, applying filtering.
+    Legacy function - resolve tools for an agent, applying filtering.
+
+    DEPRECATED: Use resolve_tools_as_toolsets() instead.
 
     Args:
         tool_refs: List of MCPToolReference or dicts
@@ -471,3 +445,43 @@ async def resolve_tools_for_agent(
             filtered_refs.append(ref)
 
     return await resolve_tools(filtered_refs, local_tools, context)
+
+
+# =============================================================================
+# SIMPLE SCHEMA-BASED RESOLUTION
+# =============================================================================
+
+
+async def resolve_tools_from_schema(schema, mcp_endpoint: str | None = None) -> list | None:
+    """
+    Resolve toolsets from an AgentSchema.
+
+    Simple helper that returns toolsets or None.
+
+    Args:
+        schema: AgentSchema with tools defined
+        mcp_endpoint: Optional MCP endpoint URL. If not provided, tries local server
+                      then falls back to localhost:8000 (for demonstration - pure local is supported)
+
+    Returns:
+        List of toolsets or None if no tools
+    """
+    if not schema.tools:
+        return None
+
+    from remlight.api.mcp_main import get_mcp_server
+
+    local_server = get_mcp_server()
+
+    # If no local server initialized, fall back to HTTP endpoint
+    # This is for demonstration purposes - pure local MCP server is also supported
+    if local_server is None and mcp_endpoint is None:
+        mcp_endpoint = "http://localhost:8000/api/v1/mcp"
+        logger.debug(f"No local MCP server, using endpoint: {mcp_endpoint}")
+
+    toolsets, _ = await resolve_tools_as_toolsets(
+        schema.tools,
+        local_mcp_server=local_server or mcp_endpoint,
+    )
+
+    return toolsets if toolsets else None

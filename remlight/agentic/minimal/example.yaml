@@ -1,0 +1,85 @@
+converted_messages:
+- content: What is REM?
+  role: user
+- content: ask_agent({"agent_name":"query-agent","input_text":"What is REM?"})
+  role: tool
+- content: action({"type":"observation","payload":{"session_name":"REM Definition
+    Inquiry","confidence":0.0}})
+  role: tool
+- content: I couldn't find any information about "REM" in the current knowledge base.
+    Could you provide more context or specify what "REM" refers to? This will help
+    me find the most accurate information for you.
+  role: assistant
+prompt: What is REM?
+raw_messages:
+- parts:
+  - content: "# Orchestrator Agent\n\nA coordination agent that delegates tasks to\
+      \ specialized sub-agents.\n\n## Important Constraints\n\n> **You do NOT have\
+      \ direct access to databases, search tools, or other capabilities.**\n> Your\
+      \ ONLY capability is to delegate tasks using the `ask_agent` tool.\n\n## Available\
+      \ Agents\n\n| Agent | Purpose |\n|-------|---------|\n| `query-agent` | Search\
+      \ knowledge base, lookup entities, answer data questions |\n| `worker-agent`\
+      \ | General task execution and observations |\n| `action-agent` | Record observations\
+      \ and metadata |\n\n## Workflow\n\n1. **Analyze** - Determine which agent is\
+      \ best suited for the task\n2. **Delegate** - Use `ask_agent` to hand off the\
+      \ work:\n\n```python\nask_agent(\n    agent_name=\"query-agent\",\n    input_text=\"\
+      What tools are available for data processing?\"\n)\n```\n\n3. **Summarize**\
+      \ - Wait for results and present them to the user\n4. **Record** - Always call\
+      \ `action` to log conversation metadata:\n\n```python\naction(\n    type=\"\
+      observation\",\n    payload={\n        \"session_name\": \"Database Query Help\"\
+      ,  # 3-5 words\n        \"confidence\": 0.9\n    }\n)\n```\n\n## Session Naming\
+      \ Examples\n\n- \"Database User Search\"\n- \"Python Code Help\"\n- \"RemLight\
+      \ Features\"\n- \"Agent Configuration\"\n\n## Guidelines\n\n- **Never** claim\
+      \ capabilities you don't have\n- **Always** use `ask_agent` for actual work\n\
+      - Only answer directly when summarizing delegated results\n- Be transparent\
+      \ about what agents can and cannot do\n"
+    type: SystemPromptPart
+  - content: What is REM?
+    type: UserPromptPart
+  type: ModelRequest
+- parts:
+  - args: '{"agent_name":"query-agent","input_text":"What is REM?"}'
+    tool_name: ask_agent
+    type: ToolCallPart
+  type: ModelResponse
+- parts:
+  - content:
+      agent_schema: query-agent
+      input_text: What is REM?
+      is_structured_output: false
+      output: 'I couldn''t find any information about "REM" in the knowledge base.
+        If you can provide more context or specify what REM refers to, I can try searching
+        again. (Confidence: 0)'
+      status: success
+      text_response: 'I couldn''t find any information about "REM" in the knowledge
+        base. If you can provide more context or specify what REM refers to, I can
+        try searching again. (Confidence: 0)'
+    tool_name: ask_agent
+    type: ToolReturnPart
+  type: ModelRequest
+- parts:
+  - args: '{"type":"observation","payload":{"session_name":"REM Definition Inquiry","confidence":0.0}}'
+    tool_name: action
+    type: ToolCallPart
+  type: ModelResponse
+- parts:
+  - content:
+      _action_event: true
+      _metadata_event: true
+      action_type: observation
+      confidence: 0.0
+      payload:
+        confidence: 0.0
+        session_name: REM Definition Inquiry
+      session_name: REM Definition Inquiry
+      status: success
+    tool_name: action
+    type: ToolReturnPart
+  type: ModelRequest
+- parts:
+  - content: I couldn't find any information about "REM" in the current knowledge
+      base. Could you provide more context or specify what "REM" refers to? This will
+      help me find the most accurate information for you.
+    type: TextPart
+  type: ModelResponse
+session_id: d9179925-478e-4645-a06d-2f3d4fee9460
