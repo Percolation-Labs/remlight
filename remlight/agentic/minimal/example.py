@@ -44,7 +44,7 @@ CLI Usage:
 
 See also:
     - example.sse.txt: Sample SSE events from stream_openai_sse()
-    - example.yaml: Full session message dump (raw + converted)
+    - example.yaml: Converted messages (what gets saved to DB)
 """
 
 import asyncio
@@ -55,70 +55,64 @@ from remlight.agentic.minimal.agent_adapter import AgentAdapter, print_sse
 from remlight.models.entities import Message, Session
 from remlight.services.repository import Repository
 
+ 
+####
+### utility to save example for illustration
+####
+def save_example_outputs(prompt: str, session_id: UUID, sse_events: list, messages: list):
+    """Save SSE events and message dump to example files (for documentation)."""
+    import pathlib
+    import yaml
+    here = pathlib.Path(__file__).parent
 
-async def ensure_session(session_id: UUID) -> None:
-    """Ensure session exists in DB.
-    in production you would do some other stuff
-    sessions are not really that important for managing conversations
-    unless you want to attach other info which could be done outside of conversation flow
-    """
-    repo = Repository(Session)
-    await repo.upsert(Session(id=session_id))
+    with open(here / "example.sse.txt", "w") as f:
+        f.write("# SSE events from stream_openai_sse()\n")
+        for event in sse_events:
+            f.write(event)
 
+    output = {
+        "prompt": prompt,
+        "session_id": str(session_id),
+        "converted_messages": [{"role": m.role, "content": m.content} for m in messages],
+    }
+    with open(here / "example.yaml", "w") as f:
+        yaml.dump(output, f, default_flow_style=False, allow_unicode=True)
+
+####
+### Full flow example
+####
 
 async def main(prompt: str, session_id: UUID, save_examples: bool = False, **input_options):
-    # 1. Load schema - use caching in production
+    # 1. Load schema
     schema = AgentSchema.load("orchestrator-agent")
 
-    # 2. Ensure session and load messages
-    await ensure_session(session_id)
+    # 2. Ensure session and load messages - in prod you might build session in other ways (client controls session id)
+    await Repository(Session).upsert(Session(id=session_id))
+    
+    # a repository should abstract in schema agnostic way and manage db connections
     message_repo = Repository(Message)
-
-    #TODO: actually add some logic here to load only N messages
-    # If you store tokens as metadata you COULD create some sort of smart database function that loads only what fits in context!
+    # use generic filtering
     messages = await message_repo.find({"session_id": session_id})
 
-    # 3. Create adapter - use object caching in production e.g. tool building and agent building
+    # 3. Create adapter
     adapter = AgentAdapter(schema, **input_options)
 
     # 4. Stream
     sse_events = []
     async with adapter.run_stream(prompt, message_history=messages or None) as result:
+        #stream first and collet after
         async for event in result.stream_openai_sse():
             sse_events.append(event)
             print_sse(event)
-
+        #convert pydantic ai collection messages to our format in the adapter.
         messages = result.to_messages(session_id)
-        raw_messages = result.all_messages()
 
     # 5. Save
     await message_repo.upsert(messages)
     print(f"[{len(messages)} messages saved]")
 
-    # 6. Optionally save example outputs
     if save_examples:
-        import pathlib
-        import yaml
-        here = pathlib.Path(__file__).parent
-
-        # Save SSE events
-        with open(here / "example.sse.txt", "w") as f:
-            f.write("# SSE events from stream_openai_sse()\n")
-            for event in sse_events:
-                f.write(event)
-
-        # Save YAML dump
-        output = {
-            "prompt": prompt,
-            "session_id": str(session_id),
-            "raw_messages": [{"type": type(m).__name__, "parts": [
-                {"type": type(p).__name__, **{k: getattr(p, k, None) for k in ["content", "tool_name", "args"] if hasattr(p, k)}}
-                for p in getattr(m, "parts", [])
-            ]} for m in raw_messages],
-            "converted_messages": [{"role": m.role, "content": m.content} for m in messages],
-        }
-        with open(here / "example.yaml", "w") as f:
-            yaml.dump(output, f, default_flow_style=False, allow_unicode=True)
+        save_example_outputs(prompt, session_id, sse_events, messages)
 
 
 if __name__ == "__main__":
