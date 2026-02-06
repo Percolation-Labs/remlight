@@ -81,20 +81,43 @@ class StreamResult:
 
     def to_messages(self, session_id: str | None = None) -> list[Message]:
         """Convert pydantic-ai messages to Message entities.
-        Filters to user, assistant, and tool call messages only (not tool responses).
+
+        Captures:
+        - User prompts (UserPromptPart)
+        - Tool calls (ToolCallPart) as 'tool' role
+        - Tool results from delegates (ToolReturnPart for ask_agent with structured output)
+        - Assistant text responses (TextPart)
         """
         msgs = []
         for m in self.all_messages():
             msg_type = type(m).__name__
 
-            # User message (ModelRequest with user content)
             if msg_type == "ModelRequest":
                 parts = getattr(m, "parts", [])
                 for part in parts:
                     part_type = type(part).__name__
+
+                    # User message
                     if part_type == "UserPromptPart":
                         content = getattr(part, "content", "")
                         msgs.append(Message(role="user", content=str(content), session_id=session_id))
+
+                    # Tool return - capture delegate results with structured output
+                    elif part_type == "ToolReturnPart":
+                        tool_name = getattr(part, "tool_name", "")
+                        content = getattr(part, "content", None)
+
+                        # Only capture delegate tool results with structured output
+                        if tool_name in DELEGATE_TOOL_NAMES and isinstance(content, dict):
+                            if content.get("is_structured_output") and "output" in content:
+                                # Save structured output as tool_result message
+                                output = content["output"]
+                                output_str = json.dumps(output) if isinstance(output, dict) else str(output)
+                                msgs.append(Message(
+                                    role="tool_result",
+                                    content=output_str,
+                                    session_id=session_id,
+                                ))
 
             # Assistant message or tool call (ModelResponse)
             elif msg_type == "ModelResponse":
@@ -153,6 +176,43 @@ class StreamResult:
         return f"data: {json.dumps(chunk)}\n\n"
 
 
+DELEGATE_TOOL_NAMES = {"ask_agent"}  # Tools we load as delegates, not from MCP
+
+
+def get_delegate_tools(schema) -> list:
+    """
+    Get delegate tools (like ask_agent) declared in schema.
+
+    If schema declares ask_agent in tools, we load the production version
+    which has full streaming and structured output support.
+    """
+    tools = []
+    tool_names = {t.name for t in schema.tools} if schema.tools else set()
+
+    if "ask_agent" in tool_names:
+        from remlight.api.routers.tools import ask_agent
+        tools.append(ask_agent)
+
+    return tools
+
+
+def filter_mcp_tools(schema):
+    """Return schema with delegate tools removed (to avoid MCP conflict)."""
+    if not schema.tools:
+        return schema
+
+    # Filter out delegate tools from MCP loading
+    filtered = [t for t in schema.tools if t.name not in DELEGATE_TOOL_NAMES]
+
+    if len(filtered) == len(schema.tools):
+        return schema  # No changes needed
+
+    # Create new schema with filtered tools
+    return schema.model_copy(update={
+        "json_schema_extra": schema.json_schema_extra.model_copy(update={"tools": filtered})
+    })
+
+
 class AgentAdapter:
     """
     Wraps AgentSchema to create agent and yield OpenAI-compatible SSE events.
@@ -163,6 +223,8 @@ class AgentAdapter:
             async for event in result.stream_openai_sse():
                 print_sse(event)
             messages = result.to_messages(session_id)
+
+    All agents get a `delegate(agent_name, prompt)` tool for multi-agent orchestration.
     """
 
     def __init__(self, schema, **input_options):
@@ -177,22 +239,27 @@ class AgentAdapter:
 
         from remlight.agentic.tool_resolver import resolve_tools_from_schema
 
-        #options loads from the schema or defaults to settings allowing overrides at runtime
         options = self._schema.get_options(**self._input_options)
-        
-        #PydanticAI has tooling to build mcp tools from local or remote mcp servers
-        #see https://ai.pydantic.dev/web/#builtin-tool-support
-        toolsets = await resolve_tools_from_schema(self._schema)
 
-        self._agent = Agent(
-            #typically comes from the object description/docstring with some formatting
-            system_prompt=self._schema.get_system_prompt(),
-            #the schema when structure_output is true only (we remove docstring/description)
-            output_type=self._schema.to_output_schema(),
-            toolsets=toolsets,
-            #options like model, temperature, usage_limits just passed through
+        # Filter out delegate tools from MCP to avoid name conflict
+        mcp_schema = filter_mcp_tools(self._schema)
+        toolsets = await resolve_tools_from_schema(mcp_schema)
+
+        # Get delegate tools (ask_agent etc) as standalone tools
+        delegate_tools = get_delegate_tools(self._schema)
+
+        # Build agent with tools
+        agent_kwargs = {
+            "system_prompt": self._schema.get_system_prompt(),
+            "output_type": self._schema.to_output_schema(),
             **options
-        )
+        }
+        if toolsets:
+            agent_kwargs["toolsets"] = toolsets
+        if delegate_tools:
+            agent_kwargs["tools"] = delegate_tools
+
+        self._agent = Agent(**agent_kwargs)
 
     @asynccontextmanager
     async def run_stream(

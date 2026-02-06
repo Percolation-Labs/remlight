@@ -72,6 +72,7 @@ json_schema_extra:
   kind: agent
   name: query-agent
   version: 1.0.0
+  structured_output: true
   tools:
     - name: search
       description: Execute REM queries for entity lookup and semantic search
