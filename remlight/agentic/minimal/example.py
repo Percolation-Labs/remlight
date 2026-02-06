@@ -83,7 +83,7 @@ def save_example_outputs(prompt: str, session_id: UUID, sse_events: list, messag
 ####
 
 async def main(prompt: str, session_id: UUID, save_examples: bool = False, **input_options):
-    # 1. Load schema
+    # 1. Load schema: this loads from file or database and should be cached
     schema = AgentSchema.load("orchestrator-agent")
 
     # 2. Ensure session and load messages - in prod you might build session in other ways (client controls session id)
@@ -94,7 +94,7 @@ async def main(prompt: str, session_id: UUID, save_examples: bool = False, **inp
     # use generic filtering
     messages = await message_repo.find({"session_id": session_id})
 
-    # 3. Create adapter
+    # 3. Create adapter - should use caching internally for API use cases
     adapter = AgentAdapter(schema, **input_options)
 
     # 4. Stream
