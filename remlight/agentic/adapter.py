@@ -112,10 +112,22 @@ class StreamResult:
                         event_type = type(event).__name__
 
                         if event_type == "PartDeltaEvent":
-                            if hasattr(event, "delta") and hasattr(event.delta, "content_delta"):
-                                content = event.delta.content_delta
-                                if content:
-                                    yield self._format_chunk(content)
+                            if hasattr(event, "delta"):
+                                # Text content delta
+                                if hasattr(event.delta, "content_delta"):
+                                    content = event.delta.content_delta
+                                    if content:
+                                        yield self._format_chunk(content)
+                                # Tool args delta - accumulate args for pending tool calls
+                                if hasattr(event.delta, "args_delta"):
+                                    args_delta = event.delta.args_delta
+                                    if args_delta:
+                                        # Find the tool call this delta belongs to
+                                        part_index = getattr(event, "index", None)
+                                        for tool_id, pending in self._pending_tool_calls.items():
+                                            if pending.get("_args_buffer") is None:
+                                                pending["_args_buffer"] = ""
+                                            pending["_args_buffer"] += args_delta
 
                         elif event_type == "PartStartEvent" and hasattr(event, "part"):
                             part_type = type(event.part).__name__
@@ -126,9 +138,20 @@ class StreamResult:
                                 yield self._format_tool_call_event(event.part, "started")
                                 # Store for later completion
                                 tool_id = getattr(event.part, "tool_call_id", None) or f"call_{uuid.uuid4().hex[:8]}"
+                                # Extract args - may be JSON string or dict
+                                raw_args = getattr(event.part, "args", None)
+                                if isinstance(raw_args, str) and raw_args:
+                                    try:
+                                        parsed_args = json.loads(raw_args)
+                                    except json.JSONDecodeError:
+                                        parsed_args = {"raw": raw_args}
+                                elif isinstance(raw_args, dict):
+                                    parsed_args = raw_args
+                                else:
+                                    parsed_args = {}
                                 self._pending_tool_calls[tool_id] = {
                                     "name": event.part.tool_name,
-                                    "args": getattr(event.part, "args", {}),
+                                    "args": parsed_args,
                                     "tool_id": tool_id,
                                 }
 
@@ -150,11 +173,19 @@ class StreamResult:
                                     if result.get("_action_event"):
                                         yield self._format_action_event(result)
 
+                                # Get final args - use accumulated buffer if initial was empty
+                                final_args = pending["args"]
+                                if not final_args and pending.get("_args_buffer"):
+                                    try:
+                                        final_args = json.loads(pending["_args_buffer"])
+                                    except json.JSONDecodeError:
+                                        final_args = {"raw": pending["_args_buffer"]}
+
                                 # Emit completed event
                                 yield self._format_tool_call_completed(
                                     pending["name"],
                                     pending["tool_id"],
-                                    pending["args"],
+                                    final_args,
                                     result
                                 )
                                 del self._pending_tool_calls[tool_call_id]
