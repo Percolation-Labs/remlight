@@ -136,8 +136,12 @@ export interface ChildToolEvent {
   type: "child_tool_start" | "child_tool_result"
   /** Tool name */
   tool_name: string
-  /** Tool arguments or result */
-  data?: unknown
+  /** Tool call ID for matching start/result */
+  tool_call_id?: string
+  /** Tool arguments */
+  arguments?: Record<string, unknown>
+  /** Tool result (for child_tool_result) */
+  result?: unknown
   /** Child agent name */
   agent_name?: string
 }

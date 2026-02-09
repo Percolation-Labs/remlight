@@ -246,30 +246,34 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
       case "child_tool_result": {
         // Handle explicit child agent tool events
         const childEvent = event as ChildToolEvent
-        const childToolId = `child-${Date.now()}`
+        const childToolId = childEvent.tool_call_id || `child-${Date.now()}`
         const isStart = event.type === "child_tool_start"
 
         if (isStart) {
           const childToolCall: ToolCall = {
             id: childToolId,
             name: childEvent.tool_name,
-            args: (childEvent.data as Record<string, unknown>) || {},
+            args: childEvent.arguments || {},
             state: "in_progress",
             parentId: currentParentToolRef.current || undefined,
             agentName: childEvent.agent_name,
           }
           msg.toolCalls = [...(msg.toolCalls || []), childToolCall]
         } else {
-          // Update the child tool call with result
-          msg.toolCalls = (msg.toolCalls || []).map((t) =>
-            t.name === childEvent.tool_name && t.state === "in_progress" && t.agentName === childEvent.agent_name
-              ? {
-                  ...t,
-                  state: "completed" as const,
-                  output: childEvent.data,
-                }
-              : t
-          )
+          // Update the child tool call with result - match by tool_call_id or fallback to name+agent
+          msg.toolCalls = (msg.toolCalls || []).map((t) => {
+            const matchById = childEvent.tool_call_id && t.id === childEvent.tool_call_id
+            const matchByName = t.name === childEvent.tool_name && t.state === "in_progress" && t.agentName === childEvent.agent_name
+            if (matchById || matchByName) {
+              return {
+                ...t,
+                args: childEvent.arguments || t.args,
+                state: "completed" as const,
+                output: childEvent.result,
+              }
+            }
+            return t
+          })
         }
         setMessages((prev) =>
           prev.map((m) => (m.id === msg.id ? { ...msg } : m))

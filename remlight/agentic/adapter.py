@@ -173,8 +173,9 @@ class StreamResult:
                             "agent_name": agent_name,
                             "tool_name": tool_name,
                             "tool_call_id": tool_id,
-                            "arguments": data.get("arguments"),
                         }
+                        if data.get("arguments"):
+                            child_event["arguments"] = data["arguments"]
                         return f"event: child_tool_start\ndata: {json.dumps(child_event)}\n\n"
                     elif status == "completed":
                         child_event = {
@@ -182,6 +183,7 @@ class StreamResult:
                             "agent_name": agent_name,
                             "tool_name": tool_name,
                             "tool_call_id": tool_id,
+                            "arguments": data.get("arguments"),
                             "result": data.get("result"),
                         }
                         return f"event: child_tool_result\ndata: {json.dumps(child_event)}\n\n"
