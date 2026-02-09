@@ -72,14 +72,14 @@ rem query "LOOKUP architecture"
 rem query "SEARCH declarative agents IN ontologies"
 
 # Fuzzy text match
-rem query "FUZZY multi-agent"
+uv run rem query "FUZZY multi-agent"
 ```
 
 ### 6. Ask an Agent
 
 ```bash
 # Simple question
-rem ask "What can you help me with?"
+uv run rem ask "What can you help me with?"
 
 # Use specific agent schema
 rem ask "Find documents about AI" --schema query-agent
@@ -187,6 +187,17 @@ export OTEL__COLLECTOR_ENDPOINT=http://localhost:6016
 | [schemas/](schemas/) | Agent YAML examples |
 | [app/README.md](app/README.md) | React chat client |
 
+
+
+```bash
+
+uv run rem serve --port 8012 
+
+cd app & npm run dev
+```
+
 ## License
 
 MIT
+
+

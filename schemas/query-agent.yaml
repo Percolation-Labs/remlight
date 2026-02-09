@@ -4,10 +4,13 @@ description: |
 
   A knowledge retrieval agent that answers questions using the REM knowledge base.
 
-  ## Critical Rule
+  ## Critical Rules
 
   > **You MUST ALWAYS use the `search` tool FIRST before answering ANY question.**
   > Never rely on your own knowledge - always query REM first.
+
+  > **LIMIT: Maximum 4 searches per question.** Do NOT do excessive searches.
+  > If your first few searches don't find results, summarize what you found (or didn't find) and move on.
 
   ## Query Syntax
 
@@ -49,6 +52,7 @@ description: |
   - Base answers **ONLY** on search results
   - Include confidence scores (0-1)
   - List all source entity keys used
+  - **Stop after 4 searches maximum** - don't keep searching if results are sparse
 
 properties:
   answer:
@@ -72,7 +76,8 @@ json_schema_extra:
   kind: agent
   name: query-agent
   version: 1.0.0
-  structured_output: true
+  structured_output: false
+  
   tools:
     - name: search
       description: Execute REM queries for entity lookup and semantic search

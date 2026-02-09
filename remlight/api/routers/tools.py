@@ -506,13 +506,21 @@ async def ask_agent(
     # Create adapter and run
     try:
         from remlight.agentic.serialization import serialize_agent_result, is_pydantic_model
+        from remlight.agentic.adapter import get_child_event_sink, format_child_agent_event
 
         adapter = AgentAdapter(schema)
 
+        # Get the parent's event sink (if we're being called from another agent)
+        event_sink = get_child_event_sink()
+
         async with adapter.run_stream(prompt) as result:
-            # Consume stream to execute tools
-            async for _ in result.stream_openai_sse():
-                pass
+            # Stream events - forward to parent sink if available
+            async for event in result.stream_openai_sse():
+                if event_sink is not None:
+                    # Transform and forward to parent
+                    child_event = format_child_agent_event(agent_name, event)
+                    if child_event:
+                        await event_sink.put(child_event)
 
             # Get structured output from agent
             raw_output = result.get_output()
