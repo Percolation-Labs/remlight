@@ -505,25 +505,29 @@ async def ask_agent(
 
     # Create adapter and run
     try:
+        from remlight.agentic.serialization import serialize_agent_result, is_pydantic_model
+
         adapter = AgentAdapter(schema)
-        text_response = ""
 
         async with adapter.run_stream(prompt) as result:
-            # Collect full response (don't stream for sub-agent calls)
-            async for event in result.stream_openai_sse():
-                # Extract text from SSE events
-                if '"delta":{"content":"' in event:
-                    import re
-                    match = re.search(r'"content":"([^"]*)"', event)
-                    if match:
-                        text_response += match.group(1)
+            # Consume stream to execute tools
+            async for _ in result.stream_openai_sse():
+                pass
+
+            # Get structured output from agent
+            raw_output = result.get_output()
+
+        # Serialize output for response
+        is_structured = is_pydantic_model(raw_output)
+        output = serialize_agent_result(raw_output) if raw_output is not None else {}
 
         return {
             "status": "success",
-            "output": text_response,
-            "text_response": text_response,
+            "output": output,
+            "text_response": str(raw_output) if raw_output else "",
             "agent_schema": agent_name,
             "input_text": input_text,
+            "is_structured_output": is_structured,
         }
 
     except asyncio.TimeoutError:

@@ -35,17 +35,49 @@ from pydantic_ai import Agent
 from remlight.models.entities import Message
 
 
+def extract_sse_content(event: str) -> str | None:
+    """Extract text content from an SSE event.
+
+    Returns the content string if present, None otherwise.
+    Handles OpenAI-format chat completion chunks.
+    """
+    # Skip non-data events (tool_call, action, done, etc.)
+    if not event.startswith("data: "):
+        return None
+    if event.startswith("data: [DONE]"):
+        return None
+
+    try:
+        data = json.loads(event[6:].strip())
+        if "choices" in data and data["choices"]:
+            return data["choices"][0].get("delta", {}).get("content")
+    except (json.JSONDecodeError, KeyError, IndexError):
+        pass
+    return None
+
+
 def print_sse(event: str) -> None:
     """Print content from SSE event to stdout."""
-    if event.startswith("data: ") and not event.startswith("data: [DONE]"):
-        try:
-            data = json.loads(event[6:].strip())
-            if "choices" in data and data["choices"]:
-                content = data["choices"][0].get("delta", {}).get("content")
-                if content:
-                    print(content, end="", flush=True)
-        except (json.JSONDecodeError, KeyError):
-            pass
+    content = extract_sse_content(event)
+    if content:
+        print(content, end="", flush=True)
+
+
+async def collect_sse_text(sse_stream) -> str:
+    """Collect all text content from an SSE stream.
+
+    Args:
+        sse_stream: Async generator yielding SSE event strings
+
+    Returns:
+        Concatenated text content from all events
+    """
+    text = ""
+    async for event in sse_stream:
+        content = extract_sse_content(event)
+        if content:
+            text += content
+    return text
 
 
 # Tools that are loaded as delegates (not from MCP)
@@ -110,14 +142,8 @@ class StreamResult:
                             if tool_call_id and tool_call_id in self._pending_tool_calls:
                                 pending = self._pending_tool_calls[tool_call_id]
 
-                                # Extract serializable result
-                                raw_result = tool_event.result
-                                if hasattr(raw_result, "content"):
-                                    result = raw_result.content
-                                elif hasattr(raw_result, "model_dump"):
-                                    result = raw_result.model_dump()
-                                else:
-                                    result = str(raw_result)
+                                # Extract serializable result - handle nested structures
+                                result = self._extract_serializable_result(tool_event.result)
 
                                 # Check if this is an action event
                                 if pending["name"] == "action" and isinstance(result, dict):
@@ -217,6 +243,42 @@ class StreamResult:
         }
         return f"data: {json.dumps(chunk)}\n\n"
 
+    def _extract_serializable_result(self, raw_result: Any) -> Any:
+        """Extract a JSON-serializable result from pydantic-ai tool result."""
+        # If it's already a basic type, use it
+        if raw_result is None or isinstance(raw_result, (str, int, float, bool)):
+            return raw_result
+
+        # If it's a dict or list, check if serializable
+        if isinstance(raw_result, (dict, list)):
+            try:
+                json.dumps(raw_result)
+                return raw_result
+            except (TypeError, ValueError):
+                pass
+
+        # Check for content attribute (ToolReturnPart)
+        if hasattr(raw_result, "content"):
+            content = raw_result.content
+            # Recursively extract from content
+            return self._extract_serializable_result(content)
+
+        # Check for model_dump (Pydantic model)
+        if hasattr(raw_result, "model_dump"):
+            return raw_result.model_dump()
+
+        # Check for __dict__
+        if hasattr(raw_result, "__dict__"):
+            try:
+                result = {k: v for k, v in raw_result.__dict__.items() if not k.startswith("_")}
+                json.dumps(result)
+                return result
+            except (TypeError, ValueError):
+                pass
+
+        # Last resort: string representation
+        return str(raw_result)
+
     def _format_tool_call_event(self, part, status: str) -> str:
         """Format custom tool_call SSE event."""
         tool_id = getattr(part, "tool_call_id", None) or f"call_{uuid.uuid4().hex[:8]}"
@@ -265,6 +327,17 @@ class StreamResult:
     def _format_done_event(self) -> str:
         """Format done event."""
         return f"event: done\ndata: {{\"type\": \"done\", \"reason\": \"stop\"}}\n\n"
+
+    def get_output(self) -> Any:
+        """Get the agent's structured output after streaming completes.
+
+        Returns the Pydantic model for structured_output agents,
+        or text string for text agents.
+        """
+        try:
+            return self._agent_run.result.output
+        except Exception:
+            return None
 
 
 def _get_delegate_tools(schema) -> list:
