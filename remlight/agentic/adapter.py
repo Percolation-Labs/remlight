@@ -69,9 +69,10 @@ class StreamResult:
         self._model = "unknown"
         self._is_first_chunk = True
         self._tool_index = 0
+        self._pending_tool_calls = {}  # tool_call_id -> {name, args}
 
     async def stream_openai_sse(self) -> AsyncGenerator[str, None]:
-        """Yield OpenAI-compatible SSE events."""
+        """Yield OpenAI-compatible SSE events with custom tool_call events."""
         async for node in self._agent_run:
             if Agent.is_model_request_node(node):
                 async with node.stream(self._ctx) as request_stream:
@@ -89,14 +90,51 @@ class StreamResult:
                             if part_type == "TextPart" and event.part.content:
                                 yield self._format_chunk(event.part.content)
                             elif part_type == "ToolCallPart":
-                                yield self._format_tool_call(event.part)
+                                # Emit custom tool_call event (started)
+                                yield self._format_tool_call_event(event.part, "started")
+                                # Store for later completion
+                                tool_id = getattr(event.part, "tool_call_id", None) or f"call_{uuid.uuid4().hex[:8]}"
+                                self._pending_tool_calls[tool_id] = {
+                                    "name": event.part.tool_name,
+                                    "args": getattr(event.part, "args", {}),
+                                    "tool_id": tool_id,
+                                }
 
             elif Agent.is_call_tools_node(node):
+                # Tool execution - emit executing/completed events
                 async with node.stream(self._ctx) as tools_stream:
-                    async for _ in tools_stream:
-                        pass
+                    async for tool_event in tools_stream:
+                        # Check for tool results (FunctionToolResultEvent)
+                        if hasattr(tool_event, "result"):
+                            tool_call_id = getattr(tool_event, "tool_call_id", None)
+                            if tool_call_id and tool_call_id in self._pending_tool_calls:
+                                pending = self._pending_tool_calls[tool_call_id]
+
+                                # Extract serializable result
+                                raw_result = tool_event.result
+                                if hasattr(raw_result, "content"):
+                                    result = raw_result.content
+                                elif hasattr(raw_result, "model_dump"):
+                                    result = raw_result.model_dump()
+                                else:
+                                    result = str(raw_result)
+
+                                # Check if this is an action event
+                                if pending["name"] == "action" and isinstance(result, dict):
+                                    if result.get("_action_event"):
+                                        yield self._format_action_event(result)
+
+                                # Emit completed event
+                                yield self._format_tool_call_completed(
+                                    pending["name"],
+                                    pending["tool_id"],
+                                    pending["args"],
+                                    result
+                                )
+                                del self._pending_tool_calls[tool_call_id]
 
         yield self._format_chunk("", finish_reason="stop")
+        yield self._format_done_event()
         yield "data: [DONE]\n\n"
 
     def all_messages(self) -> list:
@@ -179,25 +217,54 @@ class StreamResult:
         }
         return f"data: {json.dumps(chunk)}\n\n"
 
-    def _format_tool_call(self, part) -> str:
-        """Format tool call as OpenAI SSE chunk."""
+    def _format_tool_call_event(self, part, status: str) -> str:
+        """Format custom tool_call SSE event."""
+        tool_id = getattr(part, "tool_call_id", None) or f"call_{uuid.uuid4().hex[:8]}"
         args = getattr(part, "args", None)
-        args_str = args if isinstance(args, str) else json.dumps(args) if args else "{}"
-        tool_call = {
-            "index": self._tool_index,
-            "id": f"call_{uuid.uuid4().hex[:8]}",
-            "type": "function",
-            "function": {"name": part.tool_name, "arguments": args_str},
+
+        event_data = {
+            "type": "tool_call",
+            "tool_name": part.tool_name,
+            "tool_id": tool_id,
+            "status": status,
         }
-        self._tool_index += 1
-        chunk = {
-            "id": self._request_id,
-            "object": "chat.completion.chunk",
-            "created": self._created_at,
-            "model": self._model,
-            "choices": [{"index": 0, "delta": {"tool_calls": [tool_call]}, "finish_reason": None}],
+        if args and status != "started":
+            event_data["arguments"] = args
+
+        return f"event: tool_call\ndata: {json.dumps(event_data)}\n\n"
+
+    def _format_tool_call_completed(self, tool_name: str, tool_id: str, args: Any, result: Any) -> str:
+        """Format tool_call completed event with result."""
+        # Ensure result is JSON serializable
+        try:
+            json.dumps(result)
+            serializable_result = result
+        except (TypeError, ValueError):
+            serializable_result = str(result)
+
+        event_data = {
+            "type": "tool_call",
+            "tool_name": tool_name,
+            "tool_id": tool_id,
+            "status": "completed",
+            "arguments": args,
+            "result": serializable_result,
         }
-        return f"data: {json.dumps(chunk)}\n\n"
+        return f"event: tool_call\ndata: {json.dumps(event_data)}\n\n"
+
+    def _format_action_event(self, result: dict) -> str:
+        """Format action event from action tool result."""
+        event_data = {
+            "type": "action",
+            "action_type": result.get("action_type", "unknown"),
+            "payload": result.get("payload", {}),
+            "_action_event": True,
+        }
+        return f"event: action\ndata: {json.dumps(event_data)}\n\n"
+
+    def _format_done_event(self) -> str:
+        """Format done event."""
+        return f"event: done\ndata: {{\"type\": \"done\", \"reason\": \"stop\"}}\n\n"
 
 
 def _get_delegate_tools(schema) -> list:
