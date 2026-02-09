@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: remlight
       POSTGRES_PASSWORD: remlight
     ports:
-      - "5432:5432"
+      - "6452:5432"
     volumes:
       # pg18+ requires mount at /var/lib/postgresql (not /data subdirectory)
       - postgres_data:/var/lib/postgresql
@@ -48,7 +48,7 @@ services:
       OTEL__PROTOCOL: http
       OTEL__SERVICE_NAME: remlight-api
     ports:
-      - "8080:8000"
+      - "7001:8000"
     depends_on:
       postgres:
         condition: service_healthy

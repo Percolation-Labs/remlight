@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from remlight.agentic.adapter import AgentAdapter, print_sse
 from remlight.agentic.agent_schema import AgentSchema
+from remlight.agentic.streaming import is_simulator_agent, stream_simulator_sse
 from remlight.models.entities import Message, Session
 from remlight.services.repository import Repository
 
@@ -62,31 +63,6 @@ Use action(type='observation', payload={confidence, sources}) to record metadata
     }
 
 
-def _is_simulator_agent(schema_uri: str | None) -> bool:
-    """Check if this is the special simulator agent."""
-    return schema_uri == "rem-simulator"
-
-
-async def _stream_simulator_sse(prompt: str, model: str):
-    """Stream simulator SSE events (bypasses LLM)."""
-    import json
-    import time
-    import uuid
-
-    request_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-    created = int(time.time())
-
-    # Simulate a response
-    content = f"[Simulator] Received: {prompt}"
-
-    # First chunk with role
-    yield f"data: {json.dumps({'id': request_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': content}, 'finish_reason': None}]})}\n\n"
-
-    # Final chunk
-    yield f"data: {json.dumps({'id': request_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
-    yield "data: [DONE]\n\n"
-
-
 @router.post("/completions/{session_id}")
 @router.post("/completions")
 async def chat_completions(
@@ -119,20 +95,20 @@ async def chat_completions(
     schema_uri = req.headers.get("x-agent-schema")
 
     # Handle simulator agent specially - bypass LLM entirely
-    if _is_simulator_agent(schema_uri):
+    if is_simulator_agent(schema_uri):
         user_messages = [m for m in request.messages if m.role == "user"]
         prompt = user_messages[-1].content if user_messages else "test all"
 
         if request.stream:
             return StreamingResponse(
-                _stream_simulator_sse(prompt=prompt, model="rem-simulator"),
+                stream_simulator_sse(prompt=prompt, model="rem-simulator"),
                 media_type="text/event-stream",
             )
         else:
             return {
                 "id": "chatcmpl-simulator",
                 "object": "chat.completion",
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Simulator response."}, "finish_reason": "stop"}],
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Simulator response. Use stream=true for full demo."}, "finish_reason": "stop"}],
             }
 
     # Load agent schema
