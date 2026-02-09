@@ -102,10 +102,13 @@ class StreamResult:
         self._is_first_chunk = True
         self._tool_index = 0
         self._pending_tool_calls = {}  # tool_call_id -> {name, args}
+        self._part_index_to_tool_id: dict[int, str] = {}  # part index -> tool_call_id
 
     async def stream_openai_sse(self) -> AsyncGenerator[str, None]:
         """Yield OpenAI-compatible SSE events with custom tool_call events."""
         async for node in self._agent_run:
+            
+            # 
             if Agent.is_model_request_node(node):
                 async with node.stream(self._ctx) as request_stream:
                     async for event in request_stream:
@@ -118,13 +121,15 @@ class StreamResult:
                                     content = event.delta.content_delta
                                     if content:
                                         yield self._format_chunk(content)
-                                # Tool args delta - accumulate args for pending tool calls
+                                # Tool args delta - accumulate args for the specific tool call
                                 if hasattr(event.delta, "args_delta"):
                                     args_delta = event.delta.args_delta
                                     if args_delta:
-                                        # Find the tool call this delta belongs to
-                                        part_index = getattr(event, "index", None)
-                                        for tool_id, pending in self._pending_tool_calls.items():
+                                        # Find the tool call this delta belongs to via part index
+                                        part_index = event.index
+                                        tool_id = self._part_index_to_tool_id.get(part_index)
+                                        if tool_id and tool_id in self._pending_tool_calls:
+                                            pending = self._pending_tool_calls[tool_id]
                                             if pending.get("_args_buffer") is None:
                                                 pending["_args_buffer"] = ""
                                             pending["_args_buffer"] += args_delta
@@ -137,7 +142,10 @@ class StreamResult:
                                 # Emit custom tool_call event (started)
                                 yield self._format_tool_call_event(event.part, "started")
                                 # Store for later completion
+                                part_index = event.index
                                 tool_id = getattr(event.part, "tool_call_id", None) or f"call_{uuid.uuid4().hex[:8]}"
+                                # Map part index to tool_id for correlating args_delta
+                                self._part_index_to_tool_id[part_index] = tool_id
                                 # Extract args - may be JSON string or dict
                                 raw_args = getattr(event.part, "args", None)
                                 if isinstance(raw_args, str) and raw_args:
@@ -155,6 +163,7 @@ class StreamResult:
                                     "tool_id": tool_id,
                                 }
 
+            # NOTE Some examples of custom UI formatting here but could be any protocol
             elif Agent.is_call_tools_node(node):
                 # Tool execution - emit executing/completed events
                 async with node.stream(self._ctx) as tools_stream:
@@ -206,6 +215,8 @@ class StreamResult:
         - Tool calls (ToolCallPart) as 'tool' role
         - Tool results from delegates (ToolReturnPart for ask_agent with structured output)
         - Assistant text responses (TextPart)
+        
+        Does not capture tool responses e.g. DB lookups (but could be added optionally)
         """
         msgs = []
         for m in self.all_messages():
@@ -227,6 +238,7 @@ class StreamResult:
                         content = getattr(part, "content", None)
 
                         # Only capture delegate tool results with structured output
+                        # NOTE These are saved in the database and hence the context/memory for the conversation
                         if tool_name in DELEGATE_TOOL_NAMES and isinstance(content, dict):
                             if content.get("is_structured_output") and "output" in content:
                                 # Save structured output as tool_result message
