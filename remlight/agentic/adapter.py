@@ -1,8 +1,17 @@
 """
-Agent Adapter - The canonical way to run agents with OpenAI-compatible SSE streaming.
+Agent Adapter - Run agents with OpenAI-compatible SSE streaming.
 
-This module replaces the legacy provider.py, runner.py, streaming/, and context.py
-with a minimal, clean implementation.
+Classes:
+    AgentAdapter: Creates and runs pydantic-ai agents from AgentSchema
+    StreamResult: Streams SSE events, handles child agent delegation, converts to Messages
+
+Functions:
+    get_child_event_sink(): Get queue for child agent event forwarding
+    set_child_event_sink(): Set queue for child agent event forwarding
+    format_child_agent_event(): Transform child SSE events (wrapper for StreamResult.format_child_event)
+    extract_sse_content(): Extract text content from SSE event
+    print_sse(): Print SSE content to stdout
+    collect_sse_text(): Collect all text from SSE stream
 
 Usage:
     from remlight.agentic import AgentAdapter, AgentSchema
@@ -12,16 +21,13 @@ Usage:
 
     async with adapter.run_stream(prompt, message_history=messages) as result:
         async for event in result.stream_openai_sse():
-            print_sse(event)  # CLI helper
-            yield event       # API streaming
-        messages = result.to_messages(session_id)
+            yield event  # Stream to client
+        messages = result.to_messages(session_id)  # Persist to DB
 
-Features:
-    - OpenAI-compatible SSE streaming (chat.completion.chunk format)
-    - Automatic tool call formatting
-    - Multi-agent delegation via ask_agent tool
-    - Structured output capture from delegate agents
-    - Message conversion for database persistence
+Child Agent Streaming:
+    When an agent calls ask_agent(), child events stream in real-time via
+    _child_event_sink context variable. Events are transformed to child_content,
+    child_tool_start, child_tool_result types by StreamResult.format_child_event().
 """
 
 import asyncio
@@ -55,78 +61,9 @@ def set_child_event_sink(queue: asyncio.Queue | None) -> None:
 def format_child_agent_event(agent_name: str, event: str) -> str:
     """Transform an SSE event to indicate it came from a child agent.
 
-    Emits events in the format the UI expects:
-    - child_content: text content from child agent
-    - child_tool_start: tool call started
-    - child_tool_result: tool call completed with result
+    Wrapper for StreamResult.format_child_event() for backward compatibility.
     """
-    # Skip [DONE] and done events - parent handles its own termination
-    if "data: [DONE]" in event or 'event: done' in event:
-        return ""
-
-    # For tool_call events, convert to child_tool_start/child_tool_result
-    if event.startswith("event: tool_call"):
-        lines = event.strip().split("\n")
-        if len(lines) > 1 and lines[1].startswith("data:"):
-            try:
-                data = json.loads(lines[1][5:].strip())
-                status = data.get("status", "")
-                tool_name = data.get("tool_name", "unknown")
-                tool_id = data.get("tool_id") or data.get("tool_call_id")
-
-                if status == "started":
-                    child_event = {
-                        "type": "child_tool_start",
-                        "agent_name": agent_name,
-                        "tool_name": tool_name,
-                        "tool_call_id": tool_id,
-                        "arguments": data.get("arguments"),
-                    }
-                    return f"event: child_tool_start\ndata: {json.dumps(child_event)}\n\n"
-                elif status == "completed":
-                    child_event = {
-                        "type": "child_tool_result",
-                        "agent_name": agent_name,
-                        "tool_name": tool_name,
-                        "tool_call_id": tool_id,
-                        "result": data.get("result"),
-                    }
-                    return f"event: child_tool_result\ndata: {json.dumps(child_event)}\n\n"
-            except (json.JSONDecodeError, IndexError):
-                pass
-        return ""
-
-    # For other custom events (action), add agent_name
-    if event.startswith("event:"):
-        lines = event.strip().split("\n")
-        event_type = lines[0].replace("event:", "").strip()
-        if event_type in ("action",) and len(lines) > 1 and lines[1].startswith("data:"):
-            try:
-                data = json.loads(lines[1][5:].strip())
-                data["agent_name"] = agent_name
-                return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
-            except (json.JSONDecodeError, IndexError):
-                pass
-        return ""
-
-    # For data events (OpenAI chunks), extract content and wrap as child_content
-    if event.startswith("data:"):
-        try:
-            data = json.loads(event[5:].strip())
-            if "choices" in data and data["choices"]:
-                delta = data["choices"][0].get("delta", {})
-                content = delta.get("content", "")
-                if content:
-                    child_event = {
-                        "type": "child_content",
-                        "agent_name": agent_name,
-                        "content": content,
-                    }
-                    return f"event: child_content\ndata: {json.dumps(child_event)}\n\n"
-        except (json.JSONDecodeError, KeyError):
-            pass
-
-    return ""
+    return StreamResult.format_child_event(agent_name, event)
 
 
 def extract_sse_content(event: str) -> str | None:
@@ -185,6 +122,7 @@ class StreamResult:
     - stream_openai_sse(): Async generator of SSE events
     - to_messages(): Convert to Message entities for persistence
     - all_messages(): Raw pydantic-ai messages
+    - format_child_event(): Transform child agent events for parent streaming
     """
 
     def __init__(self, agent_run, ctx):
@@ -198,6 +136,90 @@ class StreamResult:
         self._pending_tool_calls = {}  # tool_call_id -> {name, args}
         self._part_index_to_tool_id: dict[int, str] = {}  # part index -> tool_call_id
         self._child_event_queue: asyncio.Queue | None = None
+
+    @staticmethod
+    def format_child_event(agent_name: str, event: str) -> str:
+        """Transform an SSE event to indicate it came from a child agent.
+
+        Emits events in the format the UI expects:
+        - child_content: text content from child agent
+        - child_tool_start: tool call started
+        - child_tool_result: tool call completed with result
+
+        Args:
+            agent_name: Name of the child agent (e.g., "query-agent")
+            event: Raw SSE event string from child's stream_openai_sse()
+
+        Returns:
+            Transformed SSE event string, or empty string if event should be skipped
+        """
+        # Skip [DONE] and done events - parent handles its own termination
+        if "data: [DONE]" in event or 'event: done' in event:
+            return ""
+
+        # For tool_call events, convert to child_tool_start/child_tool_result
+        if event.startswith("event: tool_call"):
+            lines = event.strip().split("\n")
+            if len(lines) > 1 and lines[1].startswith("data:"):
+                try:
+                    data = json.loads(lines[1][5:].strip())
+                    status = data.get("status", "")
+                    tool_name = data.get("tool_name", "unknown")
+                    tool_id = data.get("tool_id") or data.get("tool_call_id")
+
+                    if status == "started":
+                        child_event = {
+                            "type": "child_tool_start",
+                            "agent_name": agent_name,
+                            "tool_name": tool_name,
+                            "tool_call_id": tool_id,
+                            "arguments": data.get("arguments"),
+                        }
+                        return f"event: child_tool_start\ndata: {json.dumps(child_event)}\n\n"
+                    elif status == "completed":
+                        child_event = {
+                            "type": "child_tool_result",
+                            "agent_name": agent_name,
+                            "tool_name": tool_name,
+                            "tool_call_id": tool_id,
+                            "result": data.get("result"),
+                        }
+                        return f"event: child_tool_result\ndata: {json.dumps(child_event)}\n\n"
+                except (json.JSONDecodeError, IndexError):
+                    pass
+            return ""
+
+        # For other custom events (action), add agent_name
+        if event.startswith("event:"):
+            lines = event.strip().split("\n")
+            event_type = lines[0].replace("event:", "").strip()
+            if event_type in ("action",) and len(lines) > 1 and lines[1].startswith("data:"):
+                try:
+                    data = json.loads(lines[1][5:].strip())
+                    data["agent_name"] = agent_name
+                    return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+                except (json.JSONDecodeError, IndexError):
+                    pass
+            return ""
+
+        # For data events (OpenAI chunks), extract content and wrap as child_content
+        if event.startswith("data:"):
+            try:
+                data = json.loads(event[5:].strip())
+                if "choices" in data and data["choices"]:
+                    delta = data["choices"][0].get("delta", {})
+                    content = delta.get("content", "")
+                    if content:
+                        child_event = {
+                            "type": "child_content",
+                            "agent_name": agent_name,
+                            "content": content,
+                        }
+                        return f"event: child_content\ndata: {json.dumps(child_event)}\n\n"
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        return ""
 
     async def stream_openai_sse(self) -> AsyncGenerator[str, None]:
         """Yield OpenAI-compatible SSE events with custom tool_call events.
@@ -697,6 +719,11 @@ class AgentAdapter:
         # Debug: dump payload to example-payload.yaml
         await self._dump_agent_payload(agent_kwargs, toolsets, all_tools)
 
+
+    #######
+    ## Some utility methods
+    #######
+    
     async def _dump_agent_payload(self, agent_kwargs: dict, toolsets: list | None, tools: list | None):
         """Dump agent configuration to example-payload.yaml for debugging."""
         import os
